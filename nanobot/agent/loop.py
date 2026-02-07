@@ -479,10 +479,16 @@ class AgentLoop:
 
         # /clear - Clear conversation history
         if content in ("/clear", "/reset", "/new"):
-            session = self.sessions.get_or_create(msg.session_key)
-            session.clear()
-            self.sessions.save(session)
-            logger.info(f"Cleared session: {msg.session_key}")
+            # For Honcho, create a new session (preserves old for user modeling)
+            # For local sessions, just clear messages
+            if self.honcho_enabled and hasattr(self.sessions, "new_session"):
+                self.sessions.new_session(msg.session_key)
+                logger.info(f"Created new Honcho session for: {msg.session_key}")
+            else:
+                session = self.sessions.get_or_create(msg.session_key)
+                session.clear()
+                self.sessions.save(session)
+                logger.info(f"Cleared session: {msg.session_key}")
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,

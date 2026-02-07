@@ -287,10 +287,7 @@ class HonchoSessionManager:
 
     def delete(self, key: str) -> bool:
         """
-        Delete a session from cache.
-
-        Note: This only removes from local cache. Honcho sessions
-        are retained for user modeling purposes.
+        Delete a session from local cache.
 
         Args:
             key: Session key.
@@ -302,6 +299,40 @@ class HonchoSessionManager:
             del self._cache[key]
             return True
         return False
+
+    def new_session(self, key: str) -> HonchoSession:
+        """
+        Create a new session, preserving the old one for user modeling.
+
+        This creates a fresh session with a new ID while keeping the old
+        session's data in Honcho for continued user modeling.
+
+        Args:
+            key: Original session key (e.g., "discord:123456").
+
+        Returns:
+            A fresh HonchoSession with no message history.
+        """
+        import time
+
+        # Remove old session from caches (but don't delete from Honcho)
+        old_session = self._cache.pop(key, None)
+        if old_session:
+            self._sessions_cache.pop(old_session.honcho_session_id, None)
+
+        # Create new session with timestamp suffix
+        # This preserves old session in Honcho while starting fresh
+        timestamp = int(time.time())
+        new_key = f"{key}:{timestamp}"
+
+        # Get or create will create a fresh session
+        session = self.get_or_create(new_key)
+
+        # Cache under original key for future messages
+        self._cache[key] = session
+
+        logger.info(f"Created new session for {key} (honcho: {session.honcho_session_id})")
+        return session
 
     def get_user_context(self, session_key: str, query: str) -> str:
         """

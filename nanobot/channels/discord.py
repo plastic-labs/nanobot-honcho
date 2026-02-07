@@ -33,6 +33,7 @@ class DiscordChannel(BaseChannel):
         self._heartbeat_task: asyncio.Task | None = None
         self._typing_tasks: dict[str, asyncio.Task] = {}
         self._http: httpx.AsyncClient | None = None
+        self._app_id: str | None = None
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""
@@ -143,9 +144,13 @@ class DiscordChannel(BaseChannel):
                 await self._start_heartbeat(interval_ms / 1000)
                 await self._identify()
             elif op == 0 and event_type == "READY":
-                logger.info("Discord gateway READY")
+                self._app_id = payload.get("application", {}).get("id")
+                logger.info(f"Discord gateway READY (app_id: {self._app_id})")
+                await self._register_commands()
             elif op == 0 and event_type == "MESSAGE_CREATE":
                 await self._handle_message_create(payload)
+            elif op == 0 and event_type == "INTERACTION_CREATE":
+                await self._handle_interaction(payload)
             elif op == 7:
                 # RECONNECT: exit loop to reconnect
                 logger.info("Discord gateway requested reconnect")
@@ -269,3 +274,103 @@ class DiscordChannel(BaseChannel):
         task = self._typing_tasks.pop(channel_id, None)
         if task:
             task.cancel()
+
+    async def _register_commands(self) -> None:
+        """Register Discord slash commands."""
+        if not self._http or not self._app_id:
+            return
+
+        commands = [
+            {
+                "name": "clear",
+                "description": "Clear conversation history and start fresh",
+                "type": 1,  # CHAT_INPUT
+            },
+            {
+                "name": "status",
+                "description": "Show session status",
+                "type": 1,
+            },
+        ]
+
+        url = f"{DISCORD_API_BASE}/applications/{self._app_id}/commands"
+        headers = {"Authorization": f"Bot {self.config.token}"}
+
+        for cmd in commands:
+            try:
+                response = await self._http.post(url, headers=headers, json=cmd)
+                if response.status_code in (200, 201):
+                    logger.debug(f"Registered slash command: /{cmd['name']}")
+                else:
+                    logger.warning(f"Failed to register /{cmd['name']}: {response.status_code}")
+            except Exception as e:
+                logger.warning(f"Failed to register /{cmd['name']}: {e}")
+
+    async def _handle_interaction(self, payload: dict[str, Any]) -> None:
+        """Handle Discord interaction (slash command)."""
+        if not self._http:
+            return
+
+        interaction_type = payload.get("type")
+        if interaction_type != 2:  # APPLICATION_COMMAND
+            return
+
+        data = payload.get("data", {})
+        command_name = data.get("name")
+        interaction_id = payload.get("id")
+        interaction_token = payload.get("token")
+        channel_id = payload.get("channel_id", "")
+        user = payload.get("member", {}).get("user") or payload.get("user") or {}
+        sender_id = user.get("id", "")
+
+        if not self.is_allowed(sender_id):
+            await self._respond_interaction(interaction_id, interaction_token, "Access denied.")
+            return
+
+        # Handle commands by forwarding as messages
+        if command_name == "clear":
+            # Send immediate response
+            await self._respond_interaction(
+                interaction_id, interaction_token,
+                "Clearing conversation history..."
+            )
+            # Forward as message to trigger the actual clear logic
+            await self._handle_message(
+                sender_id=sender_id,
+                chat_id=channel_id,
+                content="/clear",
+            )
+        elif command_name == "status":
+            # Forward as message
+            await self._respond_interaction(
+                interaction_id, interaction_token,
+                "Checking status..."
+            )
+            await self._handle_message(
+                sender_id=sender_id,
+                chat_id=channel_id,
+                content="/status",
+            )
+        else:
+            await self._respond_interaction(
+                interaction_id, interaction_token,
+                f"Unknown command: {command_name}"
+            )
+
+    async def _respond_interaction(
+        self, interaction_id: str, interaction_token: str, content: str
+    ) -> None:
+        """Send response to a Discord interaction."""
+        if not self._http:
+            return
+
+        url = f"{DISCORD_API_BASE}/interactions/{interaction_id}/{interaction_token}/callback"
+        payload = {
+            "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
+            "data": {"content": content},
+        }
+
+        try:
+            await self._http.post(url, json=payload)
+        except Exception as e:
+            logger.warning(f"Failed to respond to interaction: {e}")
