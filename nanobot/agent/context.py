@@ -57,11 +57,12 @@ class ContextBuilder:
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
-        
-        # Memory context
-        memory = self.memory.get_memory_context()
-        if memory:
-            parts.append(f"# Memory\n\n{memory}")
+
+        # Memory context (only for legacy file-based memory, skip if Honcho is enabled)
+        if self.honcho_session_manager is None:
+            memory = self.memory.get_memory_context()
+            if memory:
+                parts.append(f"# Memory\n\n{memory}")
 
         # Honcho user context (pre-fetched)
         if user_context:
@@ -112,15 +113,42 @@ Skills with available="false" need dependencies installed first - you can try in
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-        
-        return f"""# nanobot 🐈
+
+        # Base capabilities
+        capabilities = [
+            "Read, write, and edit files",
+            "Execute shell commands",
+            "Search the web and fetch web pages",
+            "Send messages to users on chat channels",
+            "Spawn subagents for complex background tasks",
+        ]
+
+        # Add Honcho capability if enabled
+        if self.honcho_session_manager is not None:
+            capabilities.append("Query user context and preferences via Honcho (use query_user_context tool)")
+
+        capabilities_str = "\n".join(f"- {c}" for c in capabilities)
+
+        # Memory section depends on whether Honcho is enabled
+        if self.honcho_session_manager is not None:
+            memory_section = """## Memory & User Context
+Honcho manages your memory and learns about users automatically from conversations.
+- Use the `query_user_context` tool to ask questions about the user (e.g., their preferences, goals, expertise level)
+- Conversation history is managed automatically - no need to write to files
+- User `/clear` to reset the conversation and start fresh"""
+        else:
+            memory_section = f"""## Workspace
+Your workspace is at: {workspace_path}
+- Memory files: {workspace_path}/memory/MEMORY.md
+- Daily notes: {workspace_path}/memory/YYYY-MM-DD.md
+- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+
+When remembering something important, write to {workspace_path}/memory/MEMORY.md"""
+
+        return f"""# nanobot
 
 You are nanobot, a helpful AI assistant. You have access to tools that allow you to:
-- Read, write, and edit files
-- Execute shell commands
-- Search the web and fetch web pages
-- Send messages to users on chat channels
-- Spawn subagents for complex background tasks
+{capabilities_str}
 
 ## Current Time
 {now}
@@ -128,18 +156,13 @@ You are nanobot, a helpful AI assistant. You have access to tools that allow you
 ## Runtime
 {runtime}
 
-## Workspace
-Your workspace is at: {workspace_path}
-- Memory files: {workspace_path}/memory/MEMORY.md
-- Daily notes: {workspace_path}/memory/YYYY-MM-DD.md
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+{memory_section}
 
 IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
 Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
 For normal conversation, just respond with text - do not call the message tool.
 
-Always be helpful, accurate, and concise. When using tools, explain what you're doing.
-When remembering something, write to {workspace_path}/memory/MEMORY.md"""
+Always be helpful, accurate, and concise. When using tools, explain what you're doing."""
     
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""

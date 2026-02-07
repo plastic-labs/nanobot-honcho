@@ -175,10 +175,10 @@ class AgentLoop:
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
-        
+
         Args:
             msg: The inbound message to process.
-        
+
         Returns:
             The response message, or None if no response needed.
         """
@@ -186,7 +186,12 @@ class AgentLoop:
         # The chat_id contains the original "channel:chat_id" to route back to
         if msg.channel == "system":
             return await self._process_system_message(msg)
-        
+
+        # Handle user commands
+        command_response = await self._handle_command(msg)
+        if command_response is not None:
+            return command_response
+
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}")
         
         # Get or create session
@@ -402,7 +407,53 @@ class AgentLoop:
             chat_id=origin_chat_id,
             content=final_content
         )
-    
+
+    async def _handle_command(self, msg: InboundMessage) -> OutboundMessage | None:
+        """
+        Handle user commands like /clear, /help.
+
+        Args:
+            msg: The inbound message to check for commands.
+
+        Returns:
+            Response if command was handled, None otherwise.
+        """
+        content = msg.content.strip().lower()
+
+        # /clear - Clear conversation history
+        if content in ("/clear", "/reset", "/new"):
+            session = self.sessions.get_or_create(msg.session_key)
+            session.clear()
+            self.sessions.save(session)
+            logger.info(f"Cleared session: {msg.session_key}")
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Session cleared. Starting fresh conversation."
+            )
+
+        # /status - Show session info
+        if content == "/status":
+            session = self.sessions.get_or_create(msg.session_key)
+            msg_count = len(session.messages)
+            honcho_status = "enabled" if self.honcho_enabled else "disabled"
+            prefetch_status = "on" if self.honcho_prefetch else "off"
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"Session: {msg.session_key}\nMessages: {msg_count}\nHoncho: {honcho_status} (prefetch: {prefetch_status})"
+            )
+
+        # /help - Show available commands
+        if content == "/help":
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Commands:\n/clear - Clear conversation history\n/status - Show session info\n/help - Show this help"
+            )
+
+        return None
+
     async def process_direct(
         self,
         content: str,
