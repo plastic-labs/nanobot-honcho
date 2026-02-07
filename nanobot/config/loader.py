@@ -72,22 +72,23 @@ def _migrate_config(data: dict) -> dict:
     return data
 
 
+def _transform_keys(data: Any, transformer: callable) -> Any:
+    """Recursively transform dict keys using the given function."""
+    if isinstance(data, dict):
+        return {transformer(k): _transform_keys(v, transformer) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_transform_keys(item, transformer) for item in data]
+    return data
+
+
 def convert_keys(data: Any) -> Any:
     """Convert camelCase keys to snake_case for Pydantic."""
-    if isinstance(data, dict):
-        return {camel_to_snake(k): convert_keys(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [convert_keys(item) for item in data]
-    return data
+    return _transform_keys(data, camel_to_snake)
 
 
 def convert_to_camel(data: Any) -> Any:
     """Convert snake_case keys to camelCase."""
-    if isinstance(data, dict):
-        return {snake_to_camel(k): convert_to_camel(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [convert_to_camel(item) for item in data]
-    return data
+    return _transform_keys(data, snake_to_camel)
 
 
 def camel_to_snake(name: str) -> str:

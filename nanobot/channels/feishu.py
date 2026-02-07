@@ -12,6 +12,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import FeishuConfig
+from nanobot.utils.http import safe_json_parse
 
 try:
     import lark_oapi as lark
@@ -236,10 +237,8 @@ class FeishuChannel(BaseChannel):
             
             # Parse message content
             if msg_type == "text":
-                try:
-                    content = json.loads(message.content).get("text", "")
-                except json.JSONDecodeError:
-                    content = message.content or ""
+                parsed = safe_json_parse(message.content, "Feishu message")
+                content = parsed.get("text", "") if parsed else (message.content or "")
             else:
                 content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
             

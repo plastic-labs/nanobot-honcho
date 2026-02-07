@@ -1,5 +1,6 @@
 """Base channel interface for chat platforms."""
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -7,6 +8,11 @@ from loguru import logger
 
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
+
+
+# Channel timing constants
+RECONNECT_DELAY = 5  # seconds
+TYPING_INTERVAL = 8  # seconds
 
 
 class BaseChannel(ABC):
@@ -125,3 +131,45 @@ class BaseChannel(ABC):
     def is_running(self) -> bool:
         """Check if the channel is running."""
         return self._running
+
+    def _validate_token(self, token: str | None) -> bool:
+        """
+        Validate that token is configured.
+
+        Args:
+            token: The token to validate.
+
+        Returns:
+            True if valid, False otherwise.
+        """
+        if not token:
+            logger.error(f"{self.name.title()} bot token not configured")
+            return False
+        return True
+
+    async def _wait_reconnect(self, error: Exception | None = None) -> None:
+        """
+        Log error and wait before reconnecting.
+
+        Args:
+            error: Optional exception that caused the reconnect.
+        """
+        if error:
+            logger.warning(f"{self.name.title()} connection error: {error}")
+        if self._running:
+            logger.info(f"Reconnecting to {self.name.title()} in {RECONNECT_DELAY} seconds...")
+            await asyncio.sleep(RECONNECT_DELAY)
+
+    async def _cancel_task(self, task: asyncio.Task | None) -> None:
+        """
+        Safely cancel an async task.
+
+        Args:
+            task: Task to cancel (may be None).
+        """
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

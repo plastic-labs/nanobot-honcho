@@ -1,7 +1,6 @@
 """Agent loop: the core processing engine."""
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from typing import Any
@@ -12,10 +11,8 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
 from nanobot.agent.context import ContextBuilder
+from nanobot.agent.core import run_loop, register_standard_tools
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
-from nanobot.agent.tools.shell import ExecTool
-from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
@@ -107,24 +104,17 @@ class AgentLoop:
     
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        # File tools (restrict to workspace if configured)
         allowed_dir = self.workspace if self.restrict_to_workspace else None
-        self.tools.register(ReadFileTool(allowed_dir=allowed_dir))
-        self.tools.register(WriteFileTool(allowed_dir=allowed_dir))
-        self.tools.register(EditFileTool(allowed_dir=allowed_dir))
-        self.tools.register(ListDirTool(allowed_dir=allowed_dir))
-        
-        # Shell tool
-        self.tools.register(ExecTool(
-            working_dir=str(self.workspace),
-            timeout=self.exec_config.timeout,
+        register_standard_tools(
+            self.tools,
+            self.workspace,
+            allowed_dir=allowed_dir,
+            include_edit=True,
+            brave_api_key=self.brave_api_key,
+            exec_timeout=self.exec_config.timeout,
             restrict_to_workspace=self.restrict_to_workspace,
-        ))
-        
-        # Web tools
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key))
-        self.tools.register(WebFetchTool())
-        
+        )
+
         # Message tool
         message_tool = MessageTool(send_callback=self.bus.publish_outbound)
         self.tools.register(message_tool)
@@ -184,7 +174,42 @@ class AgentLoop:
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
-    
+
+    def _update_tool_contexts(self, channel: str, chat_id: str, session_key: str) -> None:
+        """Update context for all tools that need channel/chat info."""
+        message_tool = self.tools.get("message")
+        if isinstance(message_tool, MessageTool):
+            message_tool.set_context(channel, chat_id)
+
+        spawn_tool = self.tools.get("spawn")
+        if isinstance(spawn_tool, SpawnTool):
+            spawn_tool.set_context(channel, chat_id)
+
+        cron_tool = self.tools.get("cron")
+        if isinstance(cron_tool, CronTool):
+            cron_tool.set_context(channel, chat_id)
+
+        honcho_tool = self.tools.get("query_user_context")
+        if isinstance(honcho_tool, HonchoTool):
+            honcho_tool.set_context(session_key)
+
+        prompt_edit_tool = self.tools.get("edit_prompt")
+        if isinstance(prompt_edit_tool, HonchoGuidedEditTool):
+            prompt_edit_tool.set_context(session_key)
+
+    def _prefetch_user_context(self, session_key: str, content: str) -> dict[str, str] | None:
+        """Pre-fetch user context from Honcho if enabled."""
+        if not (self.honcho_enabled and self.honcho_prefetch):
+            return None
+        from nanobot.honcho.session import HonchoSessionManager
+        if not isinstance(self.sessions, HonchoSessionManager):
+            return None
+        try:
+            return self.sessions.get_prefetch_context(session_key, content)
+        except Exception as e:
+            logger.warning(f"Failed to pre-fetch Honcho context: {e}")
+            return None
+
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
@@ -209,39 +234,10 @@ class AgentLoop:
         
         # Get or create session
         session = self.sessions.get_or_create(msg.session_key)
-        
-        # Update tool contexts
-        message_tool = self.tools.get("message")
-        if isinstance(message_tool, MessageTool):
-            message_tool.set_context(msg.channel, msg.chat_id)
-        
-        spawn_tool = self.tools.get("spawn")
-        if isinstance(spawn_tool, SpawnTool):
-            spawn_tool.set_context(msg.channel, msg.chat_id)
-        
-        cron_tool = self.tools.get("cron")
-        if isinstance(cron_tool, CronTool):
-            cron_tool.set_context(msg.channel, msg.chat_id)
 
-        # Update Honcho tool context
-        honcho_tool = self.tools.get("query_user_context")
-        if isinstance(honcho_tool, HonchoTool):
-            honcho_tool.set_context(msg.session_key)
-
-        # Update prompt edit tool context
-        prompt_edit_tool = self.tools.get("edit_prompt")
-        if isinstance(prompt_edit_tool, HonchoGuidedEditTool):
-            prompt_edit_tool.set_context(msg.session_key)
-
-        # Pre-fetch user context from Honcho if enabled
-        user_context = None
-        if self.honcho_enabled and self.honcho_prefetch:
-            from nanobot.honcho.session import HonchoSessionManager
-            if isinstance(self.sessions, HonchoSessionManager):
-                try:
-                    user_context = self.sessions.get_prefetch_context(msg.session_key, msg.content)
-                except Exception as e:
-                    logger.warning(f"Failed to pre-fetch Honcho context: {e}")
+        # Update tool contexts and prefetch user context
+        self._update_tool_contexts(msg.channel, msg.chat_id, msg.session_key)
+        user_context = self._prefetch_user_context(msg.session_key, msg.content)
 
         # Pass user context to spawn tool for subagents
         spawn_tool = self.tools.get("spawn")
@@ -266,65 +262,15 @@ class AgentLoop:
             self.subagents.set_shared_budget(budget)
 
         # Agent loop
-        iteration = 0
-        final_content = None
-        budget_exhausted = False
-
-        while iteration < self.max_iterations:
-            iteration += 1
-
-            # Check budget before LLM call
-            if budget and budget.is_exhausted:
-                budget_exhausted = True
-                break
-
-            # Call LLM
-            response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=self.model
-            )
-
-            # Track spend
-            if budget:
-                budget.add_cost(
-                    cost=response.cost,
-                    input_tokens=response.usage.get("prompt_tokens", 0) if response.usage else 0,
-                    output_tokens=response.usage.get("completion_tokens", 0) if response.usage else 0,
-                    source="agent",
-                )
-                logger.debug(f"Budget: {budget.get_summary()}")
-
-            # Handle tool calls
-            if response.has_tool_calls:
-                # Add assistant message with tool calls
-                tool_call_dicts = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments)  # Must be JSON string
-                        }
-                    }
-                    for tc in response.tool_calls
-                ]
-                messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts
-                )
-
-                # Execute tools
-                for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments)
-                    logger.debug(f"Executing tool: {tool_call.name} with arguments: {args_str}")
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
-            else:
-                # No tool calls, we're done
-                final_content = response.content
-                break
+        final_content, budget_exhausted = await run_loop(
+            messages=messages,
+            tools=self.tools,
+            provider=self.provider,
+            model=self.model,
+            max_iterations=self.max_iterations,
+            budget=budget,
+            cost_source="agent",
+        )
 
         # Handle budget exhaustion
         if budget_exhausted and budget:
@@ -368,39 +314,10 @@ class AgentLoop:
         # Use the origin session for context
         session_key = f"{origin_channel}:{origin_chat_id}"
         session = self.sessions.get_or_create(session_key)
-        
-        # Update tool contexts
-        message_tool = self.tools.get("message")
-        if isinstance(message_tool, MessageTool):
-            message_tool.set_context(origin_channel, origin_chat_id)
-        
-        spawn_tool = self.tools.get("spawn")
-        if isinstance(spawn_tool, SpawnTool):
-            spawn_tool.set_context(origin_channel, origin_chat_id)
-        
-        cron_tool = self.tools.get("cron")
-        if isinstance(cron_tool, CronTool):
-            cron_tool.set_context(origin_channel, origin_chat_id)
 
-        # Update Honcho tool context
-        honcho_tool = self.tools.get("query_user_context")
-        if isinstance(honcho_tool, HonchoTool):
-            honcho_tool.set_context(session_key)
-
-        # Update prompt edit tool context
-        prompt_edit_tool = self.tools.get("edit_prompt")
-        if isinstance(prompt_edit_tool, HonchoGuidedEditTool):
-            prompt_edit_tool.set_context(session_key)
-
-        # Pre-fetch user context from Honcho if enabled
-        user_context = None
-        if self.honcho_enabled and self.honcho_prefetch:
-            from nanobot.honcho.session import HonchoSessionManager
-            if isinstance(self.sessions, HonchoSessionManager):
-                try:
-                    user_context = self.sessions.get_prefetch_context(session_key, msg.content)
-                except Exception as e:
-                    logger.warning(f"Failed to pre-fetch Honcho context: {e}")
+        # Update tool contexts and prefetch user context
+        self._update_tool_contexts(origin_channel, origin_chat_id, session_key)
+        user_context = self._prefetch_user_context(session_key, msg.content)
 
         # Build messages with the announce content
         messages = self.context.build_messages(
@@ -412,45 +329,15 @@ class AgentLoop:
         )
         
         # Agent loop (limited for announce handling)
-        iteration = 0
-        final_content = None
-        
-        while iteration < self.max_iterations:
-            iteration += 1
-            
-            response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=self.model
-            )
-            
-            if response.has_tool_calls:
-                tool_call_dicts = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments)
-                        }
-                    }
-                    for tc in response.tool_calls
-                ]
-                messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts
-                )
-                
-                for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments)
-                    logger.debug(f"Executing tool: {tool_call.name} with arguments: {args_str}")
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
-            else:
-                final_content = response.content
-                break
-        
+        final_content, _ = await run_loop(
+            messages=messages,
+            tools=self.tools,
+            provider=self.provider,
+            model=self.model,
+            max_iterations=self.max_iterations,
+            cost_source="system",
+        )
+
         if final_content is None:
             final_content = "Background task completed."
         

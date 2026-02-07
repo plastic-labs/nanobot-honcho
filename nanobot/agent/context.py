@@ -1,6 +1,7 @@
 """Context builder for assembling agent prompts."""
 
 import base64
+import json
 import mimetypes
 import platform
 from pathlib import Path
@@ -11,6 +12,30 @@ from nanobot.agent.skills import SkillsLoader
 
 if TYPE_CHECKING:
     from nanobot.honcho.session import HonchoSessionManager
+    from nanobot.providers.base import ToolCall
+
+
+def format_tool_calls(tool_calls: list["ToolCall"]) -> list[dict[str, Any]]:
+    """
+    Convert ToolCall objects to the dict format expected by LLM APIs.
+
+    Args:
+        tool_calls: List of ToolCall objects from LLM response.
+
+    Returns:
+        List of tool call dicts with id, type, and function fields.
+    """
+    return [
+        {
+            "id": tc.id,
+            "type": "function",
+            "function": {
+                "name": tc.name,
+                "arguments": json.dumps(tc.arguments),
+            },
+        }
+        for tc in tool_calls
+    ]
 
 
 class ContextBuilder:

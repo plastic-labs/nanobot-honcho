@@ -1,7 +1,6 @@
 """Subagent manager for background task execution."""
 
 import asyncio
-import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -11,10 +10,8 @@ from loguru import logger
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
+from nanobot.agent.core import run_loop, register_standard_tools
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, ListDirTool
-from nanobot.agent.tools.shell import ExecTool
-from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
 from nanobot.agent.budget import SpendBudget
 
 
@@ -116,19 +113,18 @@ class SubagentManager:
         logger.info(f"Subagent [{task_id}] starting task: {label}")
 
         try:
-            # Build subagent tools (no message tool, no spawn tool)
+            # Build subagent tools (no message tool, no spawn tool, no edit tool)
             tools = ToolRegistry()
             allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(allowed_dir=allowed_dir))
-            tools.register(ListDirTool(allowed_dir=allowed_dir))
-            tools.register(ExecTool(
-                working_dir=str(self.workspace),
-                timeout=self.exec_config.timeout,
+            register_standard_tools(
+                tools,
+                self.workspace,
+                allowed_dir=allowed_dir,
+                include_edit=False,
+                brave_api_key=self.brave_api_key,
+                exec_timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
-            ))
-            tools.register(WebSearchTool(api_key=self.brave_api_key))
-            tools.register(WebFetchTool())
+            )
 
             # Build messages with subagent-specific prompt
             system_prompt = self._build_subagent_prompt(
@@ -143,68 +139,15 @@ class SubagentManager:
             ]
 
             # Run agent loop (limited iterations)
-            max_iterations = 15
-            iteration = 0
-            final_result: str | None = None
-            budget_exhausted = False
-
-            while iteration < max_iterations:
-                iteration += 1
-
-                # Check shared budget before LLM call
-                if self._shared_budget and self._shared_budget.is_exhausted:
-                    budget_exhausted = True
-                    break
-
-                response = await self.provider.chat(
-                    messages=messages,
-                    tools=tools.get_definitions(),
-                    model=self.model,
-                )
-
-                # Track spend in shared budget
-                if self._shared_budget:
-                    self._shared_budget.add_cost(
-                        cost=response.cost,
-                        input_tokens=response.usage.get("prompt_tokens", 0) if response.usage else 0,
-                        output_tokens=response.usage.get("completion_tokens", 0) if response.usage else 0,
-                        source=f"subagent:{task_id}",
-                    )
-                    logger.debug(f"Subagent [{task_id}] budget: {self._shared_budget.get_summary()}")
-
-                if response.has_tool_calls:
-                    # Add assistant message with tool calls
-                    tool_call_dicts = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": json.dumps(tc.arguments),
-                            },
-                        }
-                        for tc in response.tool_calls
-                    ]
-                    messages.append({
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": tool_call_dicts,
-                    })
-
-                    # Execute tools
-                    for tool_call in response.tool_calls:
-                        args_str = json.dumps(tool_call.arguments)
-                        logger.debug(f"Subagent [{task_id}] executing: {tool_call.name} with arguments: {args_str}")
-                        result = await tools.execute(tool_call.name, tool_call.arguments)
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_call.name,
-                            "content": result,
-                        })
-                else:
-                    final_result = response.content
-                    break
+            final_result, budget_exhausted = await run_loop(
+                messages=messages,
+                tools=tools,
+                provider=self.provider,
+                model=self.model,
+                max_iterations=15,
+                budget=self._shared_budget,
+                cost_source=f"subagent:{task_id}",
+            )
 
             if budget_exhausted:
                 final_result = "Budget exhausted - stopping subagent"

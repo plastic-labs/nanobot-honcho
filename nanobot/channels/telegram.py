@@ -11,6 +11,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import TelegramConfig
+from nanobot.utils.media import get_media_path, get_extension
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -94,10 +95,9 @@ class TelegramChannel(BaseChannel):
     
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
-        if not self.config.token:
-            logger.error("Telegram bot token not configured")
+        if not self._validate_token(self.config.token):
             return
-        
+
         self._running = True
         
         # Build the application
@@ -239,13 +239,8 @@ class TelegramChannel(BaseChannel):
         if media_file and self._app:
             try:
                 file = await self._app.bot.get_file(media_file.file_id)
-                ext = self._get_extension(media_type, getattr(media_file, 'mime_type', None))
-                
-                # Save to workspace/media/
-                from pathlib import Path
-                media_dir = Path.home() / ".nanobot" / "media"
-                media_dir.mkdir(parents=True, exist_ok=True)
-                
+                ext = get_extension(media_type, getattr(media_file, 'mime_type', None))
+                media_dir = get_media_path()
                 file_path = media_dir / f"{media_file.file_id[:16]}{ext}"
                 await file.download_to_drive(str(file_path))
                 
@@ -288,15 +283,3 @@ class TelegramChannel(BaseChannel):
             }
         )
     
-    def _get_extension(self, media_type: str, mime_type: str | None) -> str:
-        """Get file extension based on media type."""
-        if mime_type:
-            ext_map = {
-                "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
-                "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
-            }
-            if mime_type in ext_map:
-                return ext_map[mime_type]
-        
-        type_map = {"image": ".jpg", "voice": ".ogg", "audio": ".mp3", "file": ""}
-        return type_map.get(media_type, "")

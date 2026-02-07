@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from typing import Any
 
 from loguru import logger
 
@@ -10,6 +9,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import WhatsAppConfig
+from nanobot.utils.http import safe_json_parse
 
 
 class WhatsAppChannel(BaseChannel):
@@ -57,11 +57,7 @@ class WhatsAppChannel(BaseChannel):
             except Exception as e:
                 self._connected = False
                 self._ws = None
-                logger.warning(f"WhatsApp bridge connection error: {e}")
-                
-                if self._running:
-                    logger.info("Reconnecting in 5 seconds...")
-                    await asyncio.sleep(5)
+                await self._wait_reconnect(e)
     
     async def stop(self) -> None:
         """Stop the WhatsApp channel."""
@@ -90,12 +86,10 @@ class WhatsAppChannel(BaseChannel):
     
     async def _handle_bridge_message(self, raw: str) -> None:
         """Handle a message from the bridge."""
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid JSON from bridge: {raw[:100]}")
+        data = safe_json_parse(raw, "WhatsApp bridge")
+        if not data:
             return
-        
+
         msg_type = data.get("type")
         
         if msg_type == "message":

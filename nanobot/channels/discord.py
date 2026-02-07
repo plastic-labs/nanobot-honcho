@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -11,9 +10,11 @@ from loguru import logger
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.channels.base import BaseChannel
+from nanobot.channels.base import BaseChannel, TYPING_INTERVAL
 from nanobot.config.schema import DiscordConfig
 from nanobot.utils.chunking import chunk_message
+from nanobot.utils.http import safe_json_parse, http_post_with_retry
+from nanobot.utils.media import get_media_path
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -37,8 +38,7 @@ class DiscordChannel(BaseChannel):
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""
-        if not self.config.token:
-            logger.error("Discord bot token not configured")
+        if not self._validate_token(self.config.token):
             return
 
         self._running = True
@@ -53,10 +53,7 @@ class DiscordChannel(BaseChannel):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"Discord gateway error: {e}")
-                if self._running:
-                    logger.info("Reconnecting to Discord gateway in 5 seconds...")
-                    await asyncio.sleep(5)
+                await self._wait_reconnect(e)
 
     async def stop(self) -> None:
         """Stop the Discord channel."""
@@ -95,22 +92,9 @@ class DiscordChannel(BaseChannel):
                     payload["message_reference"] = {"message_id": msg.reply_to}
                     payload["allowed_mentions"] = {"replied_user": False}
 
-                for attempt in range(3):
-                    try:
-                        response = await self._http.post(url, headers=headers, json=payload)
-                        if response.status_code == 429:
-                            data = response.json()
-                            retry_after = float(data.get("retry_after", 1.0))
-                            logger.warning(f"Discord rate limited, retrying in {retry_after}s")
-                            await asyncio.sleep(retry_after)
-                            continue
-                        response.raise_for_status()
-                        break
-                    except Exception as e:
-                        if attempt == 2:
-                            logger.error(f"Error sending Discord message chunk {i+1}/{len(chunks)}: {e}")
-                        else:
-                            await asyncio.sleep(1)
+                response = await http_post_with_retry(self._http, url, headers, payload)
+                if not response:
+                    logger.error(f"Failed to send Discord message chunk {i+1}/{len(chunks)}")
 
                 # Small delay between chunks to avoid rate limiting
                 if i < len(chunks) - 1:
@@ -124,10 +108,8 @@ class DiscordChannel(BaseChannel):
             return
 
         async for raw in self._ws:
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid JSON from Discord gateway: {raw[:100]}")
+            data = safe_json_parse(raw, "Discord gateway")
+            if not data:
                 continue
 
             op = data.get("op")
@@ -214,7 +196,7 @@ class DiscordChannel(BaseChannel):
 
         content_parts = [content] if content else []
         media_paths: list[str] = []
-        media_dir = Path.home() / ".nanobot" / "media"
+        media_dir = get_media_path()
 
         for attachment in payload.get("attachments") or []:
             url = attachment.get("url")
@@ -226,7 +208,6 @@ class DiscordChannel(BaseChannel):
                 content_parts.append(f"[attachment: {filename} - too large]")
                 continue
             try:
-                media_dir.mkdir(parents=True, exist_ok=True)
                 file_path = media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
                 resp = await self._http.get(url)
                 resp.raise_for_status()
@@ -265,7 +246,7 @@ class DiscordChannel(BaseChannel):
                     await self._http.post(url, headers=headers)
                 except Exception:
                     pass
-                await asyncio.sleep(8)
+                await asyncio.sleep(TYPING_INTERVAL)
 
         self._typing_tasks[channel_id] = asyncio.create_task(typing_loop())
 
