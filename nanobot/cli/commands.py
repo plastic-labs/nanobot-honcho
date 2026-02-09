@@ -877,6 +877,43 @@ def status():
                 has_key = bool(p.api_key)
                 console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
 
+        # Check Honcho status
+        import os
+        has_honcho_key = bool(os.environ.get("HONCHO_API_KEY"))
+        honcho_enabled = config.honcho.enabled and has_honcho_key
+        if honcho_enabled:
+            console.print(f"Honcho: [green]enabled[/green] (workspace: {config.honcho.workspace_id})")
+        elif config.honcho.enabled:
+            console.print(f"Honcho: [yellow]config enabled but HONCHO_API_KEY not set[/yellow]")
+        else:
+            console.print(f"Honcho: [dim]disabled[/dim]")
+
+
+# ============================================================================
+# Honcho Commands
+# ============================================================================
+
+
+honcho_app = typer.Typer(help="Manage Honcho memory integration")
+app.add_typer(honcho_app, name="honcho")
+
+
+@honcho_app.command("enable")
+def honcho_enable(
+    api_key: str = typer.Option(None, "--api-key", "-k", help="Honcho API key"),
+    migrate: bool = typer.Option(False, "--migrate", help="Migrate existing local sessions to Honcho"),
+):
+    """Enable Honcho AI-native memory (replaces file-based sessions)."""
+    from nanobot.cli.honcho_setup import enable
+    enable(api_key=api_key, migrate=migrate)
+
+
+@honcho_app.command("disable")
+def honcho_disable():
+    """Disable Honcho and revert to local file-based sessions."""
+    from nanobot.cli.honcho_setup import disable
+    disable()
+
 
 if __name__ == "__main__":
     app()
