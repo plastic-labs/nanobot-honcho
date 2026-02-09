@@ -362,7 +362,8 @@ class AgentLoop:
         Returns:
             Response if command was handled, None otherwise.
         """
-        content = msg.content.strip().lower()
+        # Strip @botname suffix (Telegram sends /clear@botname in groups)
+        content = msg.content.strip().lower().split("@")[0]
 
         # /clear - Clear conversation history
         if content in ("/clear", "/reset", "/new"):

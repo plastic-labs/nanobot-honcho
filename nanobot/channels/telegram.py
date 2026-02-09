@@ -4,14 +4,22 @@ import asyncio
 import re
 
 from loguru import logger
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram import BotCommand, Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import TelegramConfig
 from nanobot.utils.media import get_media_path, get_extension
+
+
+# Commands that get forwarded to the agent loop (where Honcho handles them)
+BOT_COMMANDS = [
+    BotCommand("clear", "Clear conversation history and start fresh"),
+    BotCommand("status", "Show session info"),
+    BotCommand("help", "Show available commands"),
+]
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -107,28 +115,30 @@ class TelegramChannel(BaseChannel):
             .build()
         )
         
-        # Add message handler for text, photos, voice, documents
+        # Command handlers - /start is handled locally, others forward to agent loop
+        self._app.add_handler(CommandHandler("start", self._on_start))
+        for cmd in BOT_COMMANDS:
+            self._app.add_handler(CommandHandler(cmd.command, self._on_command))
+
+        # Message handler for text, photos, voice, documents (non-command)
         self._app.add_handler(
             MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL) 
-                & ~filters.COMMAND, 
+                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL)
+                & ~filters.COMMAND,
                 self._on_message
             )
         )
-        
-        # Add /start command handler
-        from telegram.ext import CommandHandler
-        self._app.add_handler(CommandHandler("start", self._on_start))
-        
+
         logger.info("Starting Telegram bot (polling mode)...")
         
         # Initialize and start polling
         await self._app.initialize()
         await self._app.start()
         
-        # Get bot info
+        # Get bot info and register commands in Telegram's menu
         bot_info = await self._app.bot.get_me()
         logger.info(f"Telegram bot @{bot_info.username} connected")
+        await self._app.bot.set_my_commands(BOT_COMMANDS)
         
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
@@ -184,13 +194,40 @@ class TelegramChannel(BaseChannel):
         """Handle /start command."""
         if not update.message or not update.effective_user:
             return
-        
+
         user = update.effective_user
         await update.message.reply_text(
-            f"👋 Hi {user.first_name}! I'm nanobot.\n\n"
+            f"Hi {user.first_name}! I'm nanobot.\n\n"
             "Send me a message and I'll respond!"
         )
-    
+
+    async def _on_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Forward /clear, /status, /help to the agent loop via the message bus."""
+        if not update.message or not update.effective_user:
+            return
+
+        message = update.message
+        user = update.effective_user
+        chat_id = message.chat_id
+
+        sender_id = str(user.id)
+        if user.username:
+            sender_id = f"{sender_id}|{user.username}"
+
+        if not self.is_allowed(sender_id):
+            return
+
+        # Reconstruct the /command text and forward it through the bus
+        # so AgentLoop._handle_command() can process it
+        command_text = message.text or ""
+        logger.debug(f"Telegram command from {sender_id}: {command_text}")
+
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=str(chat_id),
+            content=command_text,
+        )
+
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming messages (text, photos, voice, documents)."""
         if not update.message or not update.effective_user:
