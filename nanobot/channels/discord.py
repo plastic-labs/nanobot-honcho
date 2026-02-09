@@ -1,0 +1,357 @@
+"""Discord channel implementation using Discord Gateway websocket."""
+
+import asyncio
+import json
+from typing import Any
+
+import httpx
+import websockets
+from loguru import logger
+
+from nanobot.bus.events import OutboundMessage
+from nanobot.bus.queue import MessageBus
+from nanobot.channels.base import BaseChannel, TYPING_INTERVAL
+from nanobot.config.schema import DiscordConfig
+from nanobot.utils.chunking import chunk_message
+from nanobot.utils.http import safe_json_parse, http_post_with_retry
+from nanobot.utils.media import get_media_path
+
+
+DISCORD_API_BASE = "https://discord.com/api/v10"
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
+
+
+class DiscordChannel(BaseChannel):
+    """Discord channel using Gateway websocket."""
+
+    name = "discord"
+
+    def __init__(self, config: DiscordConfig, bus: MessageBus):
+        super().__init__(config, bus)
+        self.config: DiscordConfig = config
+        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._seq: int | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+        self._typing_tasks: dict[str, asyncio.Task] = {}
+        self._http: httpx.AsyncClient | None = None
+        self._app_id: str | None = None
+
+    async def start(self) -> None:
+        """Start the Discord gateway connection."""
+        if not self._validate_token(self.config.token):
+            return
+
+        self._running = True
+        self._http = httpx.AsyncClient(timeout=30.0)
+
+        while self._running:
+            try:
+                logger.info("Connecting to Discord gateway...")
+                async with websockets.connect(self.config.gateway_url) as ws:
+                    self._ws = ws
+                    await self._gateway_loop()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                await self._wait_reconnect(e)
+
+    async def stop(self) -> None:
+        """Stop the Discord channel."""
+        self._running = False
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+        for task in self._typing_tasks.values():
+            task.cancel()
+        self._typing_tasks.clear()
+        if self._ws:
+            await self._ws.close()
+            self._ws = None
+        if self._http:
+            await self._http.aclose()
+            self._http = None
+
+    async def send(self, msg: OutboundMessage) -> None:
+        """Send a message through Discord REST API, chunking if needed."""
+        if not self._http:
+            logger.warning("Discord HTTP client not initialized")
+            return
+
+        url = f"{DISCORD_API_BASE}/channels/{msg.chat_id}/messages"
+        headers = {"Authorization": f"Bot {self.config.token}"}
+
+        # Split message into chunks respecting Discord's 2000 char limit
+        chunks = list(chunk_message(msg.content))
+
+        try:
+            for i, chunk_content in enumerate(chunks):
+                payload: dict[str, Any] = {"content": chunk_content}
+
+                # Only add reply reference to first chunk
+                if i == 0 and msg.reply_to:
+                    payload["message_reference"] = {"message_id": msg.reply_to}
+                    payload["allowed_mentions"] = {"replied_user": False}
+
+                response = await http_post_with_retry(self._http, url, headers, payload)
+                if not response:
+                    logger.error(f"Failed to send Discord message chunk {i+1}/{len(chunks)}")
+
+                # Small delay between chunks to avoid rate limiting
+                if i < len(chunks) - 1:
+                    await asyncio.sleep(0.5)
+        finally:
+            await self._stop_typing(msg.chat_id)
+
+    async def _gateway_loop(self) -> None:
+        """Main gateway loop: identify, heartbeat, dispatch events."""
+        if not self._ws:
+            return
+
+        async for raw in self._ws:
+            data = safe_json_parse(raw, "Discord gateway")
+            if not data:
+                continue
+
+            op = data.get("op")
+            event_type = data.get("t")
+            seq = data.get("s")
+            payload = data.get("d")
+
+            if seq is not None:
+                self._seq = seq
+
+            if op == 10:
+                # HELLO: start heartbeat and identify
+                interval_ms = payload.get("heartbeat_interval", 45000)
+                await self._start_heartbeat(interval_ms / 1000)
+                await self._identify()
+            elif op == 0 and event_type == "READY":
+                self._app_id = payload.get("application", {}).get("id")
+                logger.info(f"Discord gateway READY (app_id: {self._app_id})")
+                await self._register_commands()
+            elif op == 0 and event_type == "MESSAGE_CREATE":
+                await self._handle_message_create(payload)
+            elif op == 0 and event_type == "INTERACTION_CREATE":
+                await self._handle_interaction(payload)
+            elif op == 7:
+                # RECONNECT: exit loop to reconnect
+                logger.info("Discord gateway requested reconnect")
+                break
+            elif op == 9:
+                # INVALID_SESSION: reconnect
+                logger.warning("Discord gateway invalid session")
+                break
+
+    async def _identify(self) -> None:
+        """Send IDENTIFY payload."""
+        if not self._ws:
+            return
+
+        identify = {
+            "op": 2,
+            "d": {
+                "token": self.config.token,
+                "intents": self.config.intents,
+                "properties": {
+                    "os": "nanobot",
+                    "browser": "nanobot",
+                    "device": "nanobot",
+                },
+            },
+        }
+        await self._ws.send(json.dumps(identify))
+
+    async def _start_heartbeat(self, interval_s: float) -> None:
+        """Start or restart the heartbeat loop."""
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+
+        async def heartbeat_loop() -> None:
+            while self._running and self._ws:
+                payload = {"op": 1, "d": self._seq}
+                try:
+                    await self._ws.send(json.dumps(payload))
+                except Exception as e:
+                    logger.warning(f"Discord heartbeat failed: {e}")
+                    break
+                await asyncio.sleep(interval_s)
+
+        self._heartbeat_task = asyncio.create_task(heartbeat_loop())
+
+    async def _handle_message_create(self, payload: dict[str, Any]) -> None:
+        """Handle incoming Discord messages."""
+        author = payload.get("author") or {}
+        if author.get("bot"):
+            return
+
+        sender_id = str(author.get("id", ""))
+        channel_id = str(payload.get("channel_id", ""))
+        content = payload.get("content") or ""
+
+        if not sender_id or not channel_id:
+            return
+
+        if not self.is_allowed(sender_id):
+            return
+
+        content_parts = [content] if content else []
+        media_paths: list[str] = []
+        media_dir = get_media_path()
+
+        for attachment in payload.get("attachments") or []:
+            url = attachment.get("url")
+            filename = attachment.get("filename") or "attachment"
+            size = attachment.get("size") or 0
+            if not url or not self._http:
+                continue
+            if size and size > MAX_ATTACHMENT_BYTES:
+                content_parts.append(f"[attachment: {filename} - too large]")
+                continue
+            try:
+                file_path = media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
+                resp = await self._http.get(url)
+                resp.raise_for_status()
+                file_path.write_bytes(resp.content)
+                media_paths.append(str(file_path))
+                content_parts.append(f"[attachment: {file_path}]")
+            except Exception as e:
+                logger.warning(f"Failed to download Discord attachment: {e}")
+                content_parts.append(f"[attachment: {filename} - download failed]")
+
+        reply_to = (payload.get("referenced_message") or {}).get("id")
+
+        await self._start_typing(channel_id)
+
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=channel_id,
+            content="\n".join(p for p in content_parts if p) or "[empty message]",
+            media=media_paths,
+            metadata={
+                "message_id": str(payload.get("id", "")),
+                "guild_id": payload.get("guild_id"),
+                "reply_to": reply_to,
+            },
+        )
+
+    async def _start_typing(self, channel_id: str) -> None:
+        """Start periodic typing indicator for a channel."""
+        await self._stop_typing(channel_id)
+
+        async def typing_loop() -> None:
+            url = f"{DISCORD_API_BASE}/channels/{channel_id}/typing"
+            headers = {"Authorization": f"Bot {self.config.token}"}
+            while self._running:
+                try:
+                    await self._http.post(url, headers=headers)
+                except Exception:
+                    pass
+                await asyncio.sleep(TYPING_INTERVAL)
+
+        self._typing_tasks[channel_id] = asyncio.create_task(typing_loop())
+
+    async def _stop_typing(self, channel_id: str) -> None:
+        """Stop typing indicator for a channel."""
+        task = self._typing_tasks.pop(channel_id, None)
+        if task:
+            task.cancel()
+
+    async def _register_commands(self) -> None:
+        """Register Discord slash commands."""
+        if not self._http or not self._app_id:
+            return
+
+        commands = [
+            {
+                "name": "clear",
+                "description": "Clear conversation history and start fresh",
+                "type": 1,  # CHAT_INPUT
+            },
+            {
+                "name": "status",
+                "description": "Show session status",
+                "type": 1,
+            },
+        ]
+
+        url = f"{DISCORD_API_BASE}/applications/{self._app_id}/commands"
+        headers = {"Authorization": f"Bot {self.config.token}"}
+
+        for cmd in commands:
+            try:
+                response = await self._http.post(url, headers=headers, json=cmd)
+                if response.status_code in (200, 201):
+                    logger.debug(f"Registered slash command: /{cmd['name']}")
+                else:
+                    logger.warning(f"Failed to register /{cmd['name']}: {response.status_code}")
+            except Exception as e:
+                logger.warning(f"Failed to register /{cmd['name']}: {e}")
+
+    async def _handle_interaction(self, payload: dict[str, Any]) -> None:
+        """Handle Discord interaction (slash command)."""
+        if not self._http:
+            return
+
+        interaction_type = payload.get("type")
+        if interaction_type != 2:  # APPLICATION_COMMAND
+            return
+
+        data = payload.get("data", {})
+        command_name = data.get("name")
+        interaction_id = payload.get("id")
+        interaction_token = payload.get("token")
+        channel_id = payload.get("channel_id", "")
+        user = payload.get("member", {}).get("user") or payload.get("user") or {}
+        sender_id = user.get("id", "")
+
+        if not self.is_allowed(sender_id):
+            await self._respond_interaction(interaction_id, interaction_token, "Access denied.")
+            return
+
+        # Handle commands by forwarding as messages
+        if command_name == "clear":
+            # Send immediate response
+            await self._respond_interaction(
+                interaction_id, interaction_token,
+                "Clearing conversation history..."
+            )
+            # Forward as message to trigger the actual clear logic
+            await self._handle_message(
+                sender_id=sender_id,
+                chat_id=channel_id,
+                content="/clear",
+            )
+        elif command_name == "status":
+            # Forward as message
+            await self._respond_interaction(
+                interaction_id, interaction_token,
+                "Checking status..."
+            )
+            await self._handle_message(
+                sender_id=sender_id,
+                chat_id=channel_id,
+                content="/status",
+            )
+        else:
+            await self._respond_interaction(
+                interaction_id, interaction_token,
+                f"Unknown command: {command_name}"
+            )
+
+    async def _respond_interaction(
+        self, interaction_id: str, interaction_token: str, content: str
+    ) -> None:
+        """Send response to a Discord interaction."""
+        if not self._http:
+            return
+
+        url = f"{DISCORD_API_BASE}/interactions/{interaction_id}/{interaction_token}/callback"
+        payload = {
+            "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
+            "data": {"content": content},
+        }
+
+        try:
+            await self._http.post(url, json=payload)
+        except Exception as e:
+            logger.warning(f"Failed to respond to interaction: {e}")
