@@ -100,7 +100,6 @@ class ContextBuilder:
                 parts.append(
                     "# User Context (from Honcho)\n\n"
                     + "\n\n".join(context_parts)
-                    + "\n\nYou can use the query_user_context tool for more specific questions about this user."
                 )
         
         # Skills - progressive loading
@@ -116,8 +115,8 @@ class ContextBuilder:
         if skills_summary:
             parts.append(f"""# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+The following skills are available. Load a skill by reading its SKILL.md file, if relevant to what the user is asking.
+Skills with available="false" need dependencies installed first.
 
 {skills_summary}""")
         
@@ -131,28 +130,12 @@ Skills with available="false" need dependencies installed first - you can try in
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
-        # Base capabilities
-        capabilities = [
-            "Read, write, and edit files",
-            "Execute shell commands",
-            "Search the web and fetch web pages",
-            "Send messages to users on chat channels",
-            "Spawn subagents for complex background tasks",
-        ]
-
-        # Add Honcho capability if enabled
-        if self.honcho_session_manager is not None:
-            capabilities.append("Query user context and preferences via Honcho (use query_user_context tool)")
-
-        capabilities_str = "\n".join(f"- {c}" for c in capabilities)
-
         # Memory section depends on whether Honcho is enabled
         if self.honcho_session_manager is not None:
-            memory_section = """## Memory & User Context
+            memory_section = """## Memory
 Honcho manages your memory and learns about users automatically from conversations.
-- Use the `query_user_context` tool to ask questions about the user (e.g., their preferences, goals, expertise level)
-- Conversation history is managed automatically - no need to write to files
-- User `/clear` to reset the conversation and start fresh"""
+Conversation history is persistent across sessions -- no manual storage needed.
+Use `/clear` to reset the conversation and start fresh."""
         else:
             memory_section = f"""## Workspace
 Your workspace is at: {workspace_path}
@@ -164,8 +147,27 @@ When remembering something important, write to {workspace_path}/memory/MEMORY.md
 
         return f"""# nanobot
 
-You are nanobot, a helpful AI assistant. You have access to tools that allow you to:
-{capabilities_str}
+You are nanobot, a personal AI companion. Your primary role is to have natural conversations with your user. Conversation is your default mode.
+
+You have access to tools (file operations, shell, web search, messaging, subagents), but most messages just need a thoughtful reply. Use this decision framework:
+
+**Respond with text** (most of the time):
+- Greetings, small talk, casual conversation
+- Questions you can answer from knowledge or conversation context
+- Opinions, advice, brainstorming, emotional support
+- Follow-ups to previous messages
+- Acknowledging or thanking
+
+**Use a tool only when the user's request requires it:**
+- "What's the weather?" -> web search
+- "Create a file called X" -> file operation
+- "Run this command" -> shell execution
+- "Remind me at 3pm" -> cron
+- A question specifically about something a tool can look up that you don't know
+
+When in doubt, respond with text. A conversational reply is almost always better than a failed or unnecessary tool call.
+
+Do NOT use the `message` tool for normal conversation -- just respond with text directly.
 
 ## Current Time
 {now}
@@ -173,13 +175,7 @@ You are nanobot, a helpful AI assistant. You have access to tools that allow you
 ## Runtime
 {runtime}
 
-{memory_section}
-
-IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
-Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
-For normal conversation, just respond with text - do not call the message tool.
-
-Always be helpful, accurate, and concise. When using tools, explain what you're doing."""
+{memory_section}"""
     
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
