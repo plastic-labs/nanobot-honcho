@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
@@ -172,8 +173,7 @@ class HonchoSessionManager:
 
     def _sanitize_id(self, id_str: str) -> str:
         """Sanitize an ID to match Honcho's pattern: ^[a-zA-Z0-9_-]+"""
-        # Replace colons and other invalid chars with dashes
-        return id_str.replace(":", "-").replace(".", "-").replace(" ", "-")
+        return re.sub(r'[^a-zA-Z0-9_-]', '-', id_str)
 
     def get_or_create(self, key: str) -> HonchoSession:
         """
@@ -252,7 +252,7 @@ class HonchoSessionManager:
         honcho_session = self._sessions_cache.get(session.honcho_session_id)
 
         if not honcho_session:
-            honcho_session = self._get_or_create_honcho_session(
+            honcho_session, _ = self._get_or_create_honcho_session(
                 session.honcho_session_id, user_peer, assistant_peer
             )
 
