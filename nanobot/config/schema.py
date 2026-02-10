@@ -221,7 +221,7 @@ class ToolsConfig(BaseModel):
 
 class HonchoConfig(BaseModel):
     """Honcho AI-native memory integration (optional feature flag)."""
-    enabled: bool = False
+    enabled: bool = True
     workspace_id: str = "nanobot"
     prefetch: bool = True  # Pre-fetch user context before each LLM call
     context_tokens: int | None = None  # Token budget for context fetch (None = default)
