@@ -19,3 +19,8 @@ poetry.lock
 .pytest_cache/
 tests/
 botpy.log
+FINDINGS.md
+findings.html
+nanobot-honcho.html
+nanobot-honcho.md
+setup.sh
