@@ -1,9 +1,11 @@
 """Agent loop: the core processing engine."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -20,6 +22,10 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import SessionManager
+
+if TYPE_CHECKING:
+    from nanobot.config.schema import ExecToolConfig, HonchoConfig
+    from nanobot.cron.service import CronService
 
 
 class AgentLoop:
@@ -42,13 +48,14 @@ class AgentLoop:
         model: str | None = None,
         max_iterations: int = 20,
         brave_api_key: str | None = None,
-        exec_config: "ExecToolConfig | None" = None,
-        cron_service: "CronService | None" = None,
+        exec_config: ExecToolConfig | None = None,
+        cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
+        honcho_config: HonchoConfig | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
-        from nanobot.cron.service import CronService
+        self.honcho_config = honcho_config
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
@@ -106,6 +113,42 @@ class AgentLoop:
         # Cron tool (for scheduling)
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+
+        # Honcho tools (opt-in: requires honcho.enabled + HONCHO_API_KEY)
+        if self.honcho_config and self.honcho_config.enabled:
+            import os
+            if os.environ.get("HONCHO_API_KEY"):
+                try:
+                    from nanobot.honcho.client import get_honcho_client, HonchoConfig as HClientConfig
+                    from nanobot.honcho.session import HonchoSessionManager
+                    from nanobot.agent.tools.honcho import HonchoTool
+                    from nanobot.agent.tools.prompt_edit import HonchoGuidedEditTool
+
+                    client_config = HClientConfig(
+                        workspace_id=self.honcho_config.workspace_id,
+                        api_key=os.environ["HONCHO_API_KEY"],
+                        environment=self.honcho_config.environment,
+                    )
+                    get_honcho_client(client_config)
+                    session_mgr = HonchoSessionManager(
+                        context_tokens=self.honcho_config.context_tokens,
+                    )
+                    self._honcho_session_manager = session_mgr
+
+                    honcho_tool = HonchoTool(session_manager=session_mgr)
+                    self.tools.register(honcho_tool)
+
+                    edit_tool = HonchoGuidedEditTool(
+                        session_manager=session_mgr,
+                        workspace=self.workspace,
+                    )
+                    self.tools.register(edit_tool)
+
+                    logger.info("Honcho tools registered (query_user_context, edit_prompt)")
+                except ImportError:
+                    logger.warning("Honcho enabled but honcho-ai not installed. Run: nanobot honcho enable")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize Honcho: {e}")
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
