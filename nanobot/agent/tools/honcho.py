@@ -1,8 +1,13 @@
 """Honcho tool for querying user context."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import Any, TYPE_CHECKING
 
 from nanobot.agent.tools.base import Tool
+
+if TYPE_CHECKING:
+    from nanobot.honcho.session import HonchoSessionManager
 
 
 class HonchoTool(Tool):
@@ -13,7 +18,7 @@ class HonchoTool(Tool):
     based on their history and learned preferences.
     """
 
-    def __init__(self, session_manager: "HonchoSessionManager"):
+    def __init__(self, session_manager: HonchoSessionManager):
         """
         Initialize the Honcho tool.
 
