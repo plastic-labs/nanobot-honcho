@@ -1,10 +1,15 @@
 """Honcho client initialization and configuration."""
 
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from honcho import Honcho
 from loguru import logger
+
+if TYPE_CHECKING:
+    from honcho import Honcho
 
 
 @dataclass
@@ -16,7 +21,7 @@ class HonchoConfig:
     environment: str = "production"
 
     @classmethod
-    def from_env(cls, workspace_id: str = "nanobot") -> "HonchoConfig":
+    def from_env(cls, workspace_id: str = "nanobot") -> HonchoConfig:
         """Create config from environment variables."""
         return cls(
             workspace_id=workspace_id,
@@ -53,6 +58,14 @@ def get_honcho_client(config: HonchoConfig | None = None) -> Honcho:
         raise ValueError(
             "HONCHO_API_KEY environment variable is required. "
             "Get an API key from https://app.honcho.dev"
+        )
+
+    try:
+        from honcho import Honcho
+    except ImportError:
+        raise ImportError(
+            "honcho-ai is required for Honcho integration. "
+            "Install it with: nanobot honcho enable --api-key YOUR_KEY"
         )
 
     logger.info(f"Initializing Honcho client (workspace: {config.workspace_id})")

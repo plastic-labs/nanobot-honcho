@@ -219,6 +219,15 @@ class ToolsConfig(BaseModel):
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
 
 
+class HonchoConfig(BaseModel):
+    """Honcho AI-native memory integration (optional feature flag)."""
+    enabled: bool = False
+    workspace_id: str = "nanobot"
+    prefetch: bool = True  # Pre-fetch user context before each LLM call
+    context_tokens: int | None = None  # Token budget for context fetch (None = default)
+    environment: str = "production"
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
@@ -226,6 +235,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    honcho: HonchoConfig = Field(default_factory=HonchoConfig)
     
     @property
     def workspace_path(self) -> Path:

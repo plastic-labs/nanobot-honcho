@@ -1,6 +1,6 @@
-"""Honcho integration for AI-native memory."""
+"""Honcho integration for AI-native memory.
 
-from nanobot.honcho.client import get_honcho_client, HonchoConfig
-from nanobot.honcho.session import HonchoSessionManager
-
-__all__ = ["get_honcho_client", "HonchoConfig", "HonchoSessionManager"]
+This package is only active when honcho.enabled=true in config and
+HONCHO_API_KEY is set. All honcho-ai imports are deferred to avoid
+ImportError when the package is not installed.
+"""

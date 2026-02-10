@@ -1,13 +1,17 @@
 """Honcho-based session management for conversation history."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from honcho import Honcho, SessionPeerConfig
 from loguru import logger
 
 from nanobot.honcho.client import get_honcho_client
+
+if TYPE_CHECKING:
+    from honcho import Honcho, SessionPeerConfig
 
 
 @dataclass
@@ -132,6 +136,7 @@ class HonchoSessionManager:
         session = self.honcho.session(session_id)
 
         # Configure peer observation settings
+        from honcho import SessionPeerConfig
         user_config = SessionPeerConfig(observe_me=True, observe_others=True)
         ai_config = SessionPeerConfig(observe_me=False, observe_others=True)
 
