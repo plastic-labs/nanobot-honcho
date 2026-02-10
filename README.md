@@ -158,11 +158,6 @@ Honcho observes conversations and builds a persistent model of each user peer. T
 | `nanobot honcho enable --api-key KEY` | Enable Honcho and install SDK |
 | `nanobot honcho disable` | Disable Honcho (preserves remote data) |
 | `nanobot honcho status` | Show connection, workspace, and peer info |
-| `nanobot honcho interview` | Run the identity interview to bootstrap your profile |
-
-The **interview** asks a few questions about how you prefer nanobot to behave -- communication style, technical depth, tone. Answers are saved as conclusions on your peer profile so nanobot can personalize from the first message.
-
-To disable: `nanobot honcho disable`
 
 ## 🖥️ Local Models (vLLM)
 
