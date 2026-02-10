@@ -1,34 +1,25 @@
 <div align="center">
   <img src="nanobot_logo.png" alt="nanobot" width="500">
-  <h1>nanobot: Ultra-Lightweight Personal AI Assistant</h1>
+  <h1>nanobot-honcho: nanobot + Long-Term Memory</h1>
   <p>
-    <a href="https://pypi.org/project/nanobot-ai/"><img src="https://img.shields.io/pypi/v/nanobot-ai" alt="PyPI"></a>
-    <a href="https://pepy.tech/project/nanobot-ai"><img src="https://static.pepy.tech/badge/nanobot-ai" alt="Downloads"></a>
+    <a href="https://github.com/plastic-labs/nanobot-honcho"><img src="https://img.shields.io/badge/fork-plastic--labs-blue" alt="Plastic Labs"></a>
+    <a href="https://github.com/plastic-labs/honcho-ai"><img src="https://img.shields.io/badge/memory-honcho-purple" alt="Honcho"></a>
     <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <a href="./COMMUNICATION.md"><img src="https://img.shields.io/badge/Feishu-Group-E9DBFC?style=flat&logo=feishu&logoColor=white" alt="Feishu"></a>
-    <a href="./COMMUNICATION.md"><img src="https://img.shields.io/badge/WeChat-Group-C5EAB4?style=flat&logo=wechat&logoColor=white" alt="WeChat"></a>
-    <a href="https://discord.gg/MnCvHqpUGB"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
+  <p><em>A <a href="https://github.com/HKUDS/nanobot">nanobot</a> fork with AI-native user memory via <a href="https://honcho.dev">Honcho</a></em></p>
 </div>
 
-🐈 **nanobot** is an **ultra-lightweight** personal AI assistant inspired by [OpenClaw](https://github.com/openclaw/openclaw) 
+This is [nanobot](https://github.com/HKUDS/nanobot) — an ultra-lightweight personal AI assistant — enhanced with [Honcho](https://honcho.dev) for long-term memory and user modeling.
 
-⚡️ Delivers core agent functionality in just **~4,000** lines of code — **99% smaller** than Clawdbot's 430k+ lines.
+Honcho gives nanobot the ability to remember users across conversations, build persistent profiles through observation, and retrieve relevant context via semantic search. It's the "Long-term memory" item on nanobot's [roadmap](https://github.com/HKUDS/nanobot/discussions/431).
 
-📏 Real-time line count: **3,510 lines** (run `bash core_agent_lines.sh` to verify anytime)
-
-## 📢 News
-
-- **2026-02-10** 🎉 Released v0.1.3.post6 with improvements! Check the updates [notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post6) and our [roadmap](https://github.com/HKUDS/nanobot/discussions/431).
-- **2026-02-09** 💬 Added Slack, Email, and QQ support — nanobot now supports multiple chat platforms!
-- **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps! Check [here](#providers).
-- **2026-02-07** 🚀 Released v0.1.3.post5 with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post5) for details.
-- **2026-02-06** ✨ Added Moonshot/Kimi provider, Discord integration, and enhanced security hardening!
-- **2026-02-05** ✨ Added Feishu channel, DeepSeek provider, and enhanced scheduled tasks support!
-- **2026-02-04** 🚀 Released v0.1.3.post4 with multi-provider & Docker support! Check [here](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post4) for details.
-- **2026-02-03** ⚡ Integrated vLLM for local LLM support and improved natural language task scheduling!
-- **2026-02-02** 🎉 nanobot officially launched! Welcome to try 🐈 nanobot!
+**What this fork adds:**
+- Automatic user observation and memory across sessions
+- Semantic search over conversation history
+- Dialectic reasoning about user preferences and context
+- Per-user peer profiles that persist and evolve
+- Zero impact when disabled — behind a feature flag (`honcho.enabled`)
 
 ## Key Features of nanobot:
 
@@ -128,6 +119,50 @@ nanobot agent -m "What is 2+2?"
 ```
 
 That's it! You have a working AI assistant in 2 minutes.
+
+## Honcho Setup
+
+Get an API key from [app.honcho.dev](https://app.honcho.dev), then enable:
+
+```bash
+nanobot honcho enable --api-key YOUR_HONCHO_KEY
+```
+
+Or configure manually in `~/.nanobot/config.json`:
+
+```json
+{
+  "honcho": {
+    "enabled": true,
+    "workspaceId": "nanobot"
+  }
+}
+```
+
+And set `HONCHO_API_KEY` in your environment or `~/.nanobot/.env`.
+
+### Concepts
+
+| Concept | What it is | Example |
+|---------|-----------|---------|
+| **Workspace** | Top-level container for your nanobot instance | `nanobot` |
+| **Peer** | An identity in a conversation (user or assistant) | `eri`, `nanobot-assistant` |
+| **Session** | A conversation thread between peers | `telegram-626137386` |
+
+Honcho observes conversations and builds a persistent model of each user peer. This happens automatically -- no explicit "save" needed. The agent can also query this model to recall user preferences, past decisions, and context.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `nanobot honcho enable --api-key KEY` | Enable Honcho and install SDK |
+| `nanobot honcho disable` | Disable Honcho (preserves remote data) |
+| `nanobot honcho status` | Show connection, workspace, and peer info |
+| `nanobot honcho interview` | Run the identity interview to bootstrap your profile |
+
+The **interview** asks a few questions about how you prefer nanobot to behave -- communication style, technical depth, tone. Answers are saved as conclusions on your peer profile so nanobot can personalize from the first message.
+
+To disable: `nanobot honcho disable`
 
 ## 🖥️ Local Models (vLLM)
 
@@ -714,22 +749,25 @@ docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
 
 ```
 nanobot/
-├── agent/          # 🧠 Core agent logic
-│   ├── loop.py     #    Agent loop (LLM ↔ tool execution)
-│   ├── context.py  #    Prompt builder
-│   ├── memory.py   #    Persistent memory
-│   ├── skills.py   #    Skills loader
-│   ├── subagent.py #    Background task execution
-│   └── tools/      #    Built-in tools (incl. spawn)
-├── skills/         # 🎯 Bundled skills (github, weather, tmux...)
-├── channels/       # 📱 Chat channel integrations
-├── bus/            # 🚌 Message routing
-├── cron/           # ⏰ Scheduled tasks
-├── heartbeat/      # 💓 Proactive wake-up
-├── providers/      # 🤖 LLM providers (OpenRouter, etc.)
-├── session/        # 💬 Conversation sessions
-├── config/         # ⚙️ Configuration
-└── cli/            # 🖥️ Commands
+├── agent/          # Core agent logic
+│   ├── loop.py     #   Agent loop (LLM ↔ tool execution)
+│   ├── context.py  #   Prompt builder
+│   ├── memory.py   #   Persistent memory
+│   ├── skills.py   #   Skills loader
+│   ├── subagent.py #   Background task execution
+│   └── tools/      #   Built-in tools (incl. spawn, honcho)
+├── honcho/         # Honcho long-term memory integration
+│   ├── client.py   #   Client singleton + config
+│   └── session.py  #   Session manager (peers, context, sync)
+├── skills/         # Bundled skills (github, weather, tmux...)
+├── channels/       # Chat channel integrations
+├── bus/            # Message routing
+├── cron/           # Scheduled tasks
+├── heartbeat/      # Proactive wake-up
+├── providers/      # LLM providers (OpenRouter, etc.)
+├── session/        # Conversation sessions
+├── config/         # Configuration
+└── cli/            # Commands
 ```
 
 ## 🤝 Contribute & Roadmap
@@ -740,7 +778,7 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
 
 - [x] **Voice Transcription** — Support for Groq Whisper (Issue #13)
 - [ ] **Multi-modal** — See and hear (images, voice, video)
-- [ ] **Long-term memory** — Never forget important context
+- [x] **Long-term memory** — Never forget important context (via [Honcho](https://honcho.dev))
 - [ ] **Better reasoning** — Multi-step planning and reflection
 - [ ] **More integrations** — Calendar and more
 - [ ] **Self-improvement** — Learn from feedback and mistakes
