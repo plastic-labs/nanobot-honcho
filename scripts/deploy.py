@@ -50,16 +50,16 @@ def warn(msg): print(f"   \033[33m{msg}\033[0m")
 def fail(msg): print(f"   \033[31m{msg}\033[0m"); sys.exit(1)
 def dim(msg): print(f"   \033[2m{msg}\033[0m")
 
-def ensure_var(name, prompt, help_text=""):
+def ensure_var(name, prompt, help_text="", required=True):
     if not OPTIONS["fresh"]:
         val = os.environ.get(name, "")
         if val:
             dim(f"{name} set from environment")
             return val
     if help_text: dim(help_text)
-    val = input(f"   {prompt}: ").strip()
-    if not val: fail("Value required")
-    os.environ[name] = val
+    val = input(f"   {prompt}{'' if required else ' (optional)'}: ").strip()
+    if not val and required: fail("Value required")
+    if val: os.environ[name] = val
     return val
 
 def ssh(ip, cmd, check=True):
@@ -143,7 +143,9 @@ def collect_keys():
     key = ensure_var(PROVIDER["env"], f"{PROVIDER['name']} API key", PROVIDER["url"])
     PROVIDER["key"] = key
     ensure_var("TELEGRAM_BOT_TOKEN", "Telegram bot token", "@BotFather on Telegram -> /newbot")
-    ensure_var("HONCHO_API_KEY", "Honcho API key", "https://app.honcho.dev")
+    honcho_key = ensure_var("HONCHO_API_KEY", "Honcho API key", "https://app.honcho.dev", required=False)
+    if not honcho_key:
+        dim("nanobot will start without Honcho -- get your key at app.honcho.dev to activate long-term memory")
 
 
 # -- droplet ----------------------------------------------------------------
@@ -236,7 +238,11 @@ def write_config(ip, workspace_id):
     }
     config_json = json.dumps(config, indent=2)
     ssh(ip, f"mkdir -p /root/.nanobot/workspace && cat > /root/.nanobot/config.json << 'ENDJSON'\n{config_json}\nENDJSON")
-    ssh(ip, f"echo 'HONCHO_API_KEY={os.environ['HONCHO_API_KEY']}' > /root/.nanobot/.env")
+    honcho_key = os.environ.get("HONCHO_API_KEY", "")
+    if honcho_key:
+        ssh(ip, f"echo 'HONCHO_API_KEY={honcho_key}' > /root/.nanobot/.env")
+    else:
+        ssh(ip, "touch /root/.nanobot/.env")
     ok(f"config.json + .env written ({PROVIDER['name']}/{PROVIDER['model']})")
 
 def setup_service(ip, nanobot_bin):
