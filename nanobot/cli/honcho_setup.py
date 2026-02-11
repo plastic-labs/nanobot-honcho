@@ -340,7 +340,7 @@ def _migrate_sessions() -> int:
 # Public API (called from CLI commands)
 # ---------------------------------------------------------------------------
 
-def enable(api_key: str | None = None, migrate: bool = False) -> None:
+def enable(api_key: str | None = None, workspace_id: str | None = None, migrate: bool = False) -> None:
     """Enable Honcho memory integration."""
     config_path = _get_config_path()
     if not config_path.exists():
@@ -359,7 +359,10 @@ def enable(api_key: str | None = None, migrate: bool = False) -> None:
     honcho_cfg = data.setdefault("honcho", {})
     honcho_cfg["enabled"] = True
     honcho_cfg["prefetch"] = True
-    honcho_cfg.setdefault("workspaceId", "nanobot")
+    if workspace_id:
+        honcho_cfg["workspaceId"] = workspace_id
+    else:
+        honcho_cfg.setdefault("workspaceId", "nanobot")
     _save_raw_config(data)
     console.print("  [green]done[/green]")
 

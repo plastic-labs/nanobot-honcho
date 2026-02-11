@@ -903,11 +903,12 @@ app.add_typer(honcho_app, name="honcho")
 @honcho_app.command("enable")
 def honcho_enable(
     api_key: str = typer.Option(None, "--api-key", "-k", help="Honcho API key"),
+    workspace: str = typer.Option(None, "--workspace", "-w", help="Honcho workspace ID"),
     migrate: bool = typer.Option(False, "--migrate", help="Migrate existing local sessions to Honcho"),
 ):
     """Enable Honcho AI-native memory (replaces file-based sessions)."""
     from nanobot.cli.honcho_setup import enable
-    enable(api_key=api_key, migrate=migrate)
+    enable(api_key=api_key, workspace_id=workspace, migrate=migrate)
 
 
 @honcho_app.command("disable")
