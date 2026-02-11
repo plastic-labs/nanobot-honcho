@@ -80,13 +80,24 @@ def ensure_doctl():
 
 def ensure_doctl_auth():
     info("Checking doctl auth")
-    r = run(["doctl", "account", "get"], check=False, capture=True)
-    if r.returncode == 0:
+    r = run(["doctl", "account", "get", "--format", "Email,DropletLimit,Status", "--no-header"], check=False, capture=True)
+    if r.returncode != 0:
+        warn("Not authenticated")
+        dim("Run: doctl auth init")
+        fail("doctl auth required")
+    parts = r.stdout.strip().split()
+    if parts:
+        email = parts[0]
+        ok(f"authenticated ({email})")
+        # check droplet limit -- 0 means no billing
+        try:
+            limit = int(parts[1]) if len(parts) > 1 else -1
+        except ValueError:
+            limit = -1
+        if limit == 0:
+            fail("Droplet limit is 0 -- add a payment method at https://cloud.digitalocean.com/account/billing")
+    else:
         ok("authenticated")
-        return
-    warn("Not authenticated")
-    dim("Run: doctl auth init")
-    fail("doctl auth required")
 
 def get_ssh_key_id():
     info("Finding SSH key")
