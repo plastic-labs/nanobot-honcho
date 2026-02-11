@@ -38,7 +38,7 @@ PROVIDERS = [
 
 # filled by choose_provider / choose_model
 PROVIDER = {}  # {"name": ..., "env": ..., "key": ..., "model": ...}
-FRESH = False  # --fresh: ignore env vars, prompt for everything
+OPTIONS = {"fresh": False}  # --fresh: ignore env vars, prompt for everything
 
 
 def run(cmd, check=True, capture=False, **kw):
@@ -51,7 +51,7 @@ def fail(msg): print(f"   \033[31m{msg}\033[0m"); sys.exit(1)
 def dim(msg): print(f"   \033[2m{msg}\033[0m")
 
 def ensure_var(name, prompt, help_text=""):
-    if not FRESH:
+    if not OPTIONS["fresh"]:
         val = os.environ.get(name, "")
         if val:
             dim(f"{name} set from environment")
@@ -299,8 +299,7 @@ if __name__ == "__main__":
     p.add_argument("--fresh", action="store_true", help="Ignore env vars, prompt for everything")
     args = p.parse_args()
 
-    global FRESH
-    FRESH = args.fresh
+    OPTIONS["fresh"] = args.fresh
     DROPLET_NAME = args.name
     REPO = args.repo
     BRANCH = args.branch
