@@ -38,6 +38,7 @@ PROVIDERS = [
 
 # filled by choose_provider / choose_model
 PROVIDER = {}  # {"name": ..., "env": ..., "key": ..., "model": ...}
+FRESH = False  # --fresh: ignore env vars, prompt for everything
 
 
 def run(cmd, check=True, capture=False, **kw):
@@ -50,10 +51,11 @@ def fail(msg): print(f"   \033[31m{msg}\033[0m"); sys.exit(1)
 def dim(msg): print(f"   \033[2m{msg}\033[0m")
 
 def ensure_var(name, prompt, help_text=""):
-    val = os.environ.get(name, "")
-    if val:
-        dim(f"{name} set from environment")
-        return val
+    if not FRESH:
+        val = os.environ.get(name, "")
+        if val:
+            dim(f"{name} set from environment")
+            return val
     if help_text: dim(help_text)
     val = input(f"   {prompt}: ").strip()
     if not val: fail("Value required")
@@ -294,8 +296,11 @@ if __name__ == "__main__":
     p.add_argument("--model", help="Model identifier (e.g. anthropic/claude-sonnet-4-5)")
     p.add_argument("--telegram-token", help="Telegram bot token")
     p.add_argument("--honcho-key", help="Honcho API key")
+    p.add_argument("--fresh", action="store_true", help="Ignore env vars, prompt for everything")
     args = p.parse_args()
 
+    global FRESH
+    FRESH = args.fresh
     DROPLET_NAME = args.name
     REPO = args.repo
     BRANCH = args.branch
