@@ -91,6 +91,15 @@ class AgentLoop:
         """True when Honcho is initialized and ready."""
         return self._honcho is not None
 
+    @property
+    def _honcho_needs_setup(self) -> bool:
+        """True when Honcho is enabled in config but not active (missing API key or package)."""
+        return (
+            self.honcho_config is not None
+            and self.honcho_config.enabled
+            and not self.honcho_active
+        )
+
     def _honcho_set_context(self, session_key: str) -> None:
         """Set session context on Honcho tools and ensure the Honcho session exists."""
         if not self.honcho_active:
@@ -280,6 +289,17 @@ class AgentLoop:
         # Inject Honcho context into system prompt
         if honcho_context and messages and messages[0].get("role") == "system":
             messages[0]["content"] += honcho_context
+
+        # Honcho onboarding: if enabled but not active, ask user for API key on first message
+        if self._honcho_needs_setup and not session.messages and messages and messages[0].get("role") == "system":
+            messages[0]["content"] += (
+                "\n\n# Setup Required\n\n"
+                "Long-term memory (Honcho) is enabled but not configured yet. "
+                "Before responding to the user's message, ask them for their Honcho API key. "
+                "They can get one at https://app.honcho.dev. "
+                "Once they provide it, tell them to set it as the HONCHO_API_KEY environment variable "
+                "and restart the bot."
+            )
 
         # Agent loop
         iteration = 0
