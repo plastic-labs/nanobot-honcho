@@ -12,7 +12,8 @@ from loguru import logger
 from nanobot.honcho.client import get_honcho_client
 
 if TYPE_CHECKING:
-    from honcho import Honcho, SessionPeerConfig
+    from honcho import Honcho
+    from honcho.session import SessionPeerConfig
 
 
 @dataclass
@@ -137,7 +138,7 @@ class HonchoSessionManager:
         session = self.honcho.session(session_id)
 
         # Configure peer observation settings
-        from honcho import SessionPeerConfig
+        from honcho.session import SessionPeerConfig
         user_config = SessionPeerConfig(observe_me=True, observe_others=True)
         ai_config = SessionPeerConfig(observe_me=False, observe_others=True)
 
