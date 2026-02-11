@@ -294,11 +294,13 @@ class AgentLoop:
         if self._honcho_needs_setup and not session.messages and messages and messages[0].get("role") == "system":
             messages[0]["content"] += (
                 "\n\n# Setup Required\n\n"
-                "Long-term memory (Honcho) is enabled but not configured yet. "
-                "Before responding to the user's message, ask them for their Honcho API key. "
-                "They can get one at https://app.honcho.dev. "
-                "Once they provide it, tell them to set it as the HONCHO_API_KEY environment variable "
-                "and restart the bot."
+                "Long-term memory is enabled but your Honcho API key is missing. "
+                "Greet the user, then let them know they need to add their Honcho API key "
+                "to finish setup. They can get one at https://app.honcho.dev -- "
+                "once they have it, their admin should set HONCHO_API_KEY in the environment.\n\n"
+                "Do NOT attempt to diagnose, fix, or configure this yourself. "
+                "Do NOT read config files, run pip, or suggest systemctl commands. "
+                "Just let the user know and move on to normal conversation."
             )
 
         # Agent loop
