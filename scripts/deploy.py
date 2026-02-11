@@ -286,7 +286,8 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--name", default="nanobot", help="Droplet name (default: nanobot)")
     p.add_argument("--repo", default="https://github.com/plastic-labs/nanobot-honcho.git", help="Git repo URL")
-    p.add_argument("--branch", default="main", help="Git branch (default: main)")
+    # TODO: change default to "main" after honcho-default is merged
+    p.add_argument("--branch", default="honcho-default", help="Git branch (default: honcho-default)")
     p.add_argument("--workspace", default="nanobot", help="Honcho workspace ID (default: nanobot)")
     p.add_argument("--provider", help="Provider name (openrouter, anthropic, openai, deepseek, gemini, groq)")
     p.add_argument("--provider-key", help="API key for the chosen provider")
