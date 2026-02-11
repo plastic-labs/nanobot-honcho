@@ -57,7 +57,7 @@ def ensure_var(name, prompt, help_text="", required=True):
             dim(f"{name} set from environment")
             return val
     if help_text: dim(help_text)
-    val = input(f"   {prompt}{'' if required else ' (optional)'}: ").strip()
+    val = input(f"   {prompt}: ").strip()
     if not val and required: fail("Value required")
     if val: os.environ[name] = val
     return val
