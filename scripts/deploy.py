@@ -59,7 +59,10 @@ def ensure_var(name, prompt, help_text="", required=True):
     if help_text: dim(help_text)
     val = input(f"   {prompt}: ").strip()
     if not val and required: fail("Value required")
-    if val: os.environ[name] = val
+    if val:
+        os.environ[name] = val
+    else:
+        os.environ.pop(name, None)
     return val
 
 def ssh(ip, cmd, check=True):
