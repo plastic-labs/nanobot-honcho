@@ -141,15 +141,20 @@ Or configure manually in `~/.nanobot/config.json`:
 
 And set `HONCHO_API_KEY` in your environment or `~/.nanobot/.env`.
 
-### Concepts
+### How Identity Works
 
-| Concept | What it is | Example |
-|---------|-----------|---------|
-| **Workspace** | Top-level container for your nanobot instance | `nanobot` |
-| **Peer** | An identity in a conversation (user or assistant) | `eri`, `nanobot-assistant` |
-| **Session** | A conversation thread between peers | `telegram-626137386` |
+When Honcho is enabled, nanobot automatically creates identities from the channel and chat ID:
 
-Honcho observes conversations and builds a persistent model of each user peer. This happens automatically -- no explicit "save" needed. The agent can also query this model to recall user preferences, past decisions, and context.
+| Identity | How it's derived | Example |
+|----------|-----------------|---------|
+| **Workspace** | `honcho.workspaceId` in config | `nanobot` |
+| **User peer** | `user-{channel}-{chat_id}` | `user-telegram-626137386` |
+| **Assistant peer** | Hardcoded | `nanobot-assistant` |
+| **Session** | `{channel}-{chat_id}` (sanitized) | `telegram-626137386` |
+
+Honcho observes conversations and builds a persistent model of each user peer. This happens automatically -- no explicit "save" needed. The agent can also query this model via `query_user_context` to recall user preferences, past decisions, and context.
+
+All IDs are sanitized to `[a-zA-Z0-9_-]` for Honcho compatibility. The workspace ID can be changed in `~/.nanobot/config.json` under `honcho.workspaceId`.
 
 ### Commands
 
@@ -157,7 +162,6 @@ Honcho observes conversations and builds a persistent model of each user peer. T
 |---------|-------------|
 | `nanobot honcho enable --api-key KEY` | Enable Honcho and install SDK |
 | `nanobot honcho disable` | Disable Honcho (preserves remote data) |
-| `nanobot honcho status` | Show connection, workspace, and peer info |
 
 ## 🖥️ Local Models (vLLM)
 
