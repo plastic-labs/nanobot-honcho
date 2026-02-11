@@ -91,6 +91,15 @@ class AgentLoop:
         """True when Honcho is initialized and ready."""
         return self._honcho is not None
 
+    @property
+    def _honcho_needs_setup(self) -> bool:
+        """True when Honcho is enabled in config but not active (missing API key or package)."""
+        return (
+            self.honcho_config is not None
+            and self.honcho_config.enabled
+            and not self.honcho_active
+        )
+
     def _honcho_set_context(self, session_key: str) -> None:
         """Set session context on Honcho tools and ensure the Honcho session exists."""
         if not self.honcho_active:
@@ -100,6 +109,44 @@ class AgentLoop:
             if tool and hasattr(tool, "set_context"):
                 tool.set_context(session_key)
         self._honcho.get_or_create(session_key)
+        self._maybe_migrate_local_session(session_key)
+
+    def _maybe_migrate_local_session(self, session_key: str) -> None:
+        """
+        Auto-migrate local JSONL session history to Honcho on first activation.
+
+        Runs after get_or_create so the Honcho session and peers are cached.
+        Skips if:
+        - Honcho session already has messages (idempotent)
+        - Local session has no messages
+        """
+        from pathlib import Path
+
+        honcho_session = self._honcho.get_or_create(session_key)
+        if honcho_session.messages:
+            return
+
+        local_session = self.sessions.get_or_create(session_key)
+        real_messages = [m for m in local_session.messages if m.get("role") in ("user", "assistant")]
+        if not real_messages:
+            return
+
+        logger.info(f"Migrating {len(real_messages)} local messages to Honcho for {session_key}")
+        ok = self._honcho.migrate_local_history(session_key, real_messages)
+
+        if ok:
+            # Archive the local JSONL file
+            sessions_dir = Path.home() / ".nanobot" / "sessions"
+            from nanobot.utils.helpers import safe_filename
+            safe_key = safe_filename(session_key.replace(":", "_"))
+            src = sessions_dir / f"{safe_key}.jsonl"
+            if src.exists():
+                archive_dir = sessions_dir / "migrated"
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                src.rename(archive_dir / src.name)
+                logger.info(f"Archived {src.name} to sessions/migrated/")
+        else:
+            logger.warning(f"Migration failed for {session_key}, will retry next time")
 
     def _honcho_prefetch(self, session_key: str, user_message: str) -> str:
         """Fetch user context from Honcho for system prompt injection. Returns empty string if unavailable."""
@@ -280,6 +327,19 @@ class AgentLoop:
         # Inject Honcho context into system prompt
         if honcho_context and messages and messages[0].get("role") == "system":
             messages[0]["content"] += honcho_context
+
+        # Honcho onboarding: if enabled but not active, ask user for API key on first message
+        if self._honcho_needs_setup and not session.messages and messages and messages[0].get("role") == "system":
+            messages[0]["content"] += (
+                "\n\n# Setup Required\n\n"
+                "Long-term memory is enabled but your Honcho API key is missing. "
+                "Greet the user, then let them know they need to add their Honcho API key "
+                "to finish setup. They can get one at https://app.honcho.dev -- "
+                "once they have it, their admin should set HONCHO_API_KEY in the environment.\n\n"
+                "Do NOT attempt to diagnose, fix, or configure this yourself. "
+                "Do NOT read config files, run pip, or suggest systemctl commands. "
+                "Just let the user know and move on to normal conversation."
+            )
 
         # Agent loop
         iteration = 0

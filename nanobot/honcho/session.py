@@ -395,6 +395,91 @@ class HonchoSessionManager:
             logger.warning(f"Failed to fetch context from Honcho: {e}")
             return {}
 
+    def migrate_local_history(self, session_key: str, messages: list[dict[str, Any]]) -> bool:
+        """
+        Upload local session history to Honcho as a file.
+
+        Used when Honcho activates mid-conversation to preserve prior context.
+
+        Args:
+            session_key: The session key (e.g., "telegram:123456").
+            messages: Local messages (dicts with role, content, timestamp).
+
+        Returns:
+            True if upload succeeded, False otherwise.
+        """
+        sanitized = self._sanitize_id(session_key)
+        honcho_session = self._sessions_cache.get(sanitized)
+        if not honcho_session:
+            logger.warning(f"No Honcho session cached for '{session_key}', skipping migration")
+            return False
+
+        # Resolve user peer for attribution
+        parts = session_key.split(":", 1)
+        channel = parts[0] if len(parts) > 1 else "default"
+        chat_id = parts[1] if len(parts) > 1 else session_key
+        user_peer_id = self._sanitize_id(f"user-{channel}-{chat_id}")
+        user_peer = self._peers_cache.get(user_peer_id)
+        if not user_peer:
+            logger.warning(f"No user peer cached for '{user_peer_id}', skipping migration")
+            return False
+
+        content_bytes = self._format_migration_transcript(session_key, messages)
+        first_ts = messages[0].get("timestamp") if messages else None
+
+        try:
+            honcho_session.upload_file(
+                file=("prior_history.txt", content_bytes, "text/plain"),
+                peer=user_peer,
+                metadata={"source": "local_jsonl", "count": len(messages)},
+                created_at=first_ts,
+            )
+            logger.info(f"Migrated {len(messages)} local messages to Honcho for {session_key}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upload local history to Honcho for {session_key}: {e}")
+            return False
+
+    @staticmethod
+    def _format_migration_transcript(session_key: str, messages: list[dict[str, Any]]) -> bytes:
+        """
+        Format local messages as an XML transcript for Honcho file upload.
+
+        Args:
+            session_key: The session key for metadata.
+            messages: Local messages (dicts with role, content, timestamp).
+
+        Returns:
+            UTF-8 encoded transcript bytes.
+        """
+        timestamps = [m.get("timestamp", "") for m in messages]
+        time_range = f"{timestamps[0]} to {timestamps[-1]}" if timestamps else "unknown"
+
+        lines = [
+            "<prior_conversation_history>",
+            "<context>",
+            "This conversation history occurred BEFORE the Honcho memory system was activated.",
+            "These messages are the preceding elements of this conversation session and should",
+            "be treated as foundational context for all subsequent interactions. The user and",
+            "assistant have already established rapport through these exchanges.",
+            "</context>",
+            "",
+            f'<transcript session_key="{session_key}" message_count="{len(messages)}"',
+            f'           time_range="{time_range}">',
+            "",
+        ]
+        for msg in messages:
+            ts = msg.get("timestamp", "?")
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            lines.append(f"[{ts}] {role}: {content}")
+
+        lines.append("")
+        lines.append("</transcript>")
+        lines.append("</prior_conversation_history>")
+
+        return "\n".join(lines).encode("utf-8")
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """
         List all cached sessions.
