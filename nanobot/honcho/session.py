@@ -101,7 +101,7 @@ class HonchoSessionManager:
         """
         Get or create a Honcho peer.
 
-        Peers are lazy in SDK v2 -- no API call until first use.
+        Peers are lazy -- no API call until first use.
         Observation settings are controlled per-session via SessionPeerConfig.
 
         Args:
@@ -268,13 +268,13 @@ class HonchoSessionManager:
         for msg in new_messages:
             peer = user_peer if msg["role"] == "user" else assistant_peer
             honcho_messages.append(peer.message(msg["content"]))
-            msg["_synced"] = True
 
         try:
             honcho_session.add_messages(honcho_messages)
+            for msg in new_messages:
+                msg["_synced"] = True
             logger.debug(f"Synced {len(honcho_messages)} messages to Honcho for {session.key}")
         except Exception as e:
-            # Mark messages as not synced on failure
             for msg in new_messages:
                 msg["_synced"] = False
             logger.error(f"Failed to sync messages to Honcho: {e}")
@@ -325,8 +325,10 @@ class HonchoSessionManager:
         # Get or create will create a fresh session
         session = self.get_or_create(new_key)
 
-        # Cache under original key for future messages
+        # Cache under both original key (for future lookups) and timestamped
+        # key (so session.key matches a valid cache entry)
         self._cache[key] = session
+        self._cache[new_key] = session
 
         logger.info(f"Created new session for {key} (honcho: {session.honcho_session_id})")
         return session
