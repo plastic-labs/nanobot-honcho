@@ -337,7 +337,13 @@ class AgentLoop:
 
         # Consolidate memory before processing if session is too large
         if len(session.messages) > self.memory_window:
-            await self._consolidate_memory(session)
+            if self.honcho_active:
+                # Honcho handles persistence via _honcho_sync; just trim locally
+                keep_count = min(10, max(2, self.memory_window // 2))
+                session.messages = session.messages[-keep_count:]
+                self.sessions.save(session)
+            else:
+                await self._consolidate_memory(session)
 
 
         # Update tool contexts
@@ -606,7 +612,7 @@ class AgentLoop:
 
 1. "history_entry": A paragraph (2-5 sentences) summarizing the key events/decisions/topics. Start with a timestamp like [YYYY-MM-DD HH:MM]. Include enough detail to be useful when found by grep search later.
 
-2. "memory_update": The updated long-term memory content. Add any new facts: user location, preferences, personal info, habits, project context, technical decisions, tools/services used. If nothing new, return the existing content unchanged.
+2. "memory_update": The updated long-term memory content. Only add facts that are clearly important and likely to recur. Do NOT extract trivia, one-off mentions, or casual details. If nothing new, return the existing content unchanged.
 
 ## Current Long-term Memory
 {current_memory or "(empty)"}
