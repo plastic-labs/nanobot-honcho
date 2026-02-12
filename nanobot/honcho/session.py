@@ -480,6 +480,82 @@ class HonchoSessionManager:
 
         return "\n".join(lines).encode("utf-8")
 
+    def migrate_memory_files(self, session_key: str, workspace: Any) -> bool:
+        """
+        Upload workspace/memory/MEMORY.md and HISTORY.md to Honcho as files.
+
+        Used when Honcho activates on an instance that already has locally
+        consolidated memory (from upstream's _consolidate_memory). Backwards
+        compatible -- skips gracefully if files don't exist.
+
+        Args:
+            session_key: The session key to associate files with.
+            workspace: Path to the workspace directory.
+
+        Returns:
+            True if at least one file was uploaded, False otherwise.
+        """
+        from pathlib import Path
+        workspace = Path(workspace)
+        memory_dir = workspace / "memory"
+
+        if not memory_dir.exists():
+            return False
+
+        sanitized = self._sanitize_id(session_key)
+        honcho_session = self._sessions_cache.get(sanitized)
+        if not honcho_session:
+            logger.warning(f"No Honcho session cached for '{session_key}', skipping memory migration")
+            return False
+
+        # Resolve user peer for attribution
+        parts = session_key.split(":", 1)
+        channel = parts[0] if len(parts) > 1 else "default"
+        chat_id = parts[1] if len(parts) > 1 else session_key
+        user_peer_id = self._sanitize_id(f"user-{channel}-{chat_id}")
+        user_peer = self._peers_cache.get(user_peer_id)
+        if not user_peer:
+            logger.warning(f"No user peer cached for '{user_peer_id}', skipping memory migration")
+            return False
+
+        uploaded = False
+        files = [
+            ("MEMORY.md", "consolidated_memory.md", "Long-term user facts and preferences"),
+            ("HISTORY.md", "conversation_history.md", "Chronological conversation summaries"),
+        ]
+
+        for filename, upload_name, description in files:
+            filepath = memory_dir / filename
+            if not filepath.exists():
+                continue
+            content = filepath.read_text(encoding="utf-8").strip()
+            if not content:
+                continue
+
+            wrapped = (
+                f"<prior_memory_file>\n"
+                f"<context>\n"
+                f"This file was consolidated from local conversations BEFORE Honcho was activated.\n"
+                f"{description}. Treat as foundational context for this user.\n"
+                f"</context>\n"
+                f"\n"
+                f"{content}\n"
+                f"</prior_memory_file>\n"
+            )
+
+            try:
+                honcho_session.upload_file(
+                    file=(upload_name, wrapped.encode("utf-8"), "text/plain"),
+                    peer=user_peer,
+                    metadata={"source": "local_memory", "original_file": filename},
+                )
+                logger.info(f"Uploaded {filename} to Honcho for {session_key}")
+                uploaded = True
+            except Exception as e:
+                logger.error(f"Failed to upload {filename} to Honcho: {e}")
+
+        return uploaded
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """
         List all cached sessions.

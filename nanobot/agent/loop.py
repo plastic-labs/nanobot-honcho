@@ -85,6 +85,7 @@ class AgentLoop:
 
         self._running = False
         self._honcho: HonchoSessionManager | None = None
+        self._honcho_nudged: set[str] = set()  # sessions already nudged about Honcho
         self._register_default_tools()
 
     # ── Honcho integration ──────────────────────────────────────────
@@ -103,6 +104,19 @@ class AgentLoop:
             and not self.honcho_active
         )
 
+    @property
+    def _honcho_available_not_enabled(self) -> bool:
+        """True when honcho-ai is installed but Honcho is not enabled in config."""
+        if self.honcho_active:
+            return False
+        if self.honcho_config and self.honcho_config.enabled:
+            return False
+        try:
+            import honcho  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
     def _honcho_set_context(self, session_key: str) -> None:
         """Set session context on Honcho tools and ensure the Honcho session exists."""
         if not self.honcho_active:
@@ -116,12 +130,15 @@ class AgentLoop:
 
     def _maybe_migrate_local_session(self, session_key: str) -> None:
         """
-        Auto-migrate local JSONL session history to Honcho on first activation.
+        Auto-migrate local data to Honcho on first activation.
+
+        Migrates both:
+        1. JSONL session history (per-session message files)
+        2. MEMORY.md + HISTORY.md (consolidated memory from upstream's memory system)
 
         Runs after get_or_create so the Honcho session and peers are cached.
-        Skips if:
-        - Honcho session already has messages (idempotent)
-        - Local session has no messages
+        Skips if Honcho session already has messages (idempotent).
+        Backwards compatible -- gracefully skips files that don't exist.
         """
         from pathlib import Path
 
@@ -129,27 +146,43 @@ class AgentLoop:
         if honcho_session.messages:
             return
 
+        migrated_anything = False
+
+        # 1. Migrate JSONL session messages
         local_session = self.sessions.get_or_create(session_key)
         real_messages = [m for m in local_session.messages if m.get("role") in ("user", "assistant")]
-        if not real_messages:
-            return
+        if real_messages:
+            logger.info(f"Migrating {len(real_messages)} local messages to Honcho for {session_key}")
+            ok = self._honcho.migrate_local_history(session_key, real_messages)
+            if ok:
+                sessions_dir = Path.home() / ".nanobot" / "sessions"
+                from nanobot.utils.helpers import safe_filename
+                safe_key = safe_filename(session_key.replace(":", "_"))
+                src = sessions_dir / f"{safe_key}.jsonl"
+                if src.exists():
+                    archive_dir = sessions_dir / "migrated"
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    src.rename(archive_dir / src.name)
+                    logger.info(f"Archived {src.name} to sessions/migrated/")
+                migrated_anything = True
+            else:
+                logger.warning(f"Session migration failed for {session_key}, will retry next time")
 
-        logger.info(f"Migrating {len(real_messages)} local messages to Honcho for {session_key}")
-        ok = self._honcho.migrate_local_history(session_key, real_messages)
-
-        if ok:
-            # Archive the local JSONL file
-            sessions_dir = Path.home() / ".nanobot" / "sessions"
-            from nanobot.utils.helpers import safe_filename
-            safe_key = safe_filename(session_key.replace(":", "_"))
-            src = sessions_dir / f"{safe_key}.jsonl"
-            if src.exists():
-                archive_dir = sessions_dir / "migrated"
+        # 2. Migrate MEMORY.md + HISTORY.md (if they exist)
+        memory_dir = self.workspace / "memory"
+        if memory_dir.exists() and any(memory_dir.iterdir()):
+            if self._honcho.migrate_memory_files(session_key, self.workspace):
+                archive_dir = memory_dir / "migrated"
                 archive_dir.mkdir(parents=True, exist_ok=True)
-                src.rename(archive_dir / src.name)
-                logger.info(f"Archived {src.name} to sessions/migrated/")
-        else:
-            logger.warning(f"Migration failed for {session_key}, will retry next time")
+                for f in ("MEMORY.md", "HISTORY.md"):
+                    src = memory_dir / f
+                    if src.exists():
+                        src.rename(archive_dir / src.name)
+                        logger.info(f"Archived {f} to memory/migrated/")
+                migrated_anything = True
+
+        if migrated_anything:
+            logger.info(f"Local data migration to Honcho complete for {session_key}")
 
     def _honcho_prefetch(self, session_key: str, user_message: str) -> str:
         """Fetch user context from Honcho for system prompt injection. Returns empty string if unavailable."""
@@ -348,6 +381,26 @@ class AgentLoop:
                 "Do NOT attempt to diagnose, fix, or configure this yourself. "
                 "Do NOT read config files, run pip, or suggest systemctl commands. "
                 "Just let the user know and move on to normal conversation."
+            )
+
+        # Soft Honcho nudge: if honcho-ai is installed but not enabled,
+        # casually mention it after a few exchanges (once per session)
+        session_key_for_nudge = session_key or msg.session_key
+        if (
+            self._honcho_available_not_enabled
+            and session_key_for_nudge not in self._honcho_nudged
+            and len(session.messages) >= 4  # ~2 exchanges (2 user + 2 assistant)
+            and messages
+            and messages[0].get("role") == "system"
+        ):
+            self._honcho_nudged.add(session_key_for_nudge)
+            messages[0]["content"] += (
+                "\n\nBTW: there is an optional long-term memory provider you can enable called Honcho. "
+                "Casually mention it to the user in your response -- something like "
+                "\"by the way, I can enable long-term memory with Honcho if you're interested.\" "
+                "If they want to know more, let them know they can get an API key at https://app.honcho.dev "
+                "and then their admin can set HONCHO_API_KEY in the environment and enable it in config. "
+                "Keep it brief and natural, not a sales pitch. Only mention it once."
             )
 
         # Agent loop
