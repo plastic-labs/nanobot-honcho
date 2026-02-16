@@ -190,9 +190,12 @@ def onboard():
     
     console.print(f"\n{__logo__} nanobot is ready!")
     console.print("\nNext steps:")
-    console.print("  1. Add your API key to [cyan]~/.nanobot/config.json[/cyan]")
+    console.print("  1. Add your LLM API key to [cyan]~/.nanobot/config.json[/cyan]")
     console.print("     Get one at: https://openrouter.ai/keys")
-    console.print("  2. Chat: [cyan]nanobot agent -m \"Hello!\"[/cyan]")
+    console.print("  2. Set up long-term memory (Honcho):")
+    console.print("     Get a free key at: [cyan]https://app.honcho.dev[/cyan]")
+    console.print("     Then run: [cyan]nanobot honcho enable --api-key YOUR_KEY[/cyan]")
+    console.print("  3. Chat: [cyan]nanobot agent -m \"Hello!\"[/cyan]")
     console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]")
 
 
@@ -325,7 +328,9 @@ def gateway(
     # Warn if Honcho is enabled but API key is missing
     if config.honcho.enabled and not os.environ.get("HONCHO_API_KEY"):
         console.print("[yellow]Warning: Honcho is enabled but HONCHO_API_KEY is not set.[/yellow]")
-        console.print("[yellow]  Long-term memory will be inactive. Set the key or run: nanobot honcho disable[/yellow]")
+        console.print("[yellow]  Long-term memory will be inactive until configured.[/yellow]")
+        console.print("[yellow]  Get a free key: https://app.honcho.dev[/yellow]")
+        console.print("[yellow]  Then run: nanobot honcho enable --api-key YOUR_KEY[/yellow]")
 
     bus = MessageBus()
     provider = _make_provider(config)
@@ -444,7 +449,9 @@ def agent(
     # Warn if Honcho is enabled but API key is missing
     if config.honcho.enabled and not os.environ.get("HONCHO_API_KEY"):
         console.print("[yellow]Warning: Honcho is enabled but HONCHO_API_KEY is not set.[/yellow]")
-        console.print("[yellow]  Long-term memory will be inactive. Set the key or run: nanobot honcho disable[/yellow]")
+        console.print("[yellow]  Long-term memory will be inactive until configured.[/yellow]")
+        console.print("[yellow]  Get a free key: https://app.honcho.dev[/yellow]")
+        console.print("[yellow]  Then run: nanobot honcho enable --api-key YOUR_KEY[/yellow]")
 
     bus = MessageBus()
     provider = _make_provider(config)

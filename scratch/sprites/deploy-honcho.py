@@ -1,12 +1,12 @@
 # /// script
 # requires-python = ">=3.10"
 # ///
-"""Deploy nanobot-honcho (feat/honcho-longterm-memory) to a Fly Sprite.
+"""Deploy nanobot-honcho (honcho-default branch) to a Fly Sprite.
 
-Honcho is optional on this branch. Script installs it and enables via config.
+Honcho is a required dependency and enabled by default on this branch.
 
 Usage:
-    uv run scratch/sprites/deploy-upstream.py
+    uv run scratch/sprites/deploy-honcho.py
 """
 
 import json
@@ -14,11 +14,12 @@ import os
 import shutil
 import subprocess
 import sys
+from getpass import getpass
 
-SPRITE_NAME = "nb-upstream"
+SPRITE_NAME = "nb-honcho"
 REPO = "https://github.com/plastic-labs/nanobot-honcho.git"
-BRANCH = "feat/honcho-longterm-memory"
-WORKSPACE_ID = "nanobot-test-upstream"
+BRANCH = "honcho-default"
+WORKSPACE_ID = "nanobot-test-honcho"
 NANOBOT_BIN = ""
 
 PROVIDERS = [
@@ -62,14 +63,15 @@ def ensure_var(name, prompt, help_text=""):
 def ensure_sprite_cli():
     info("Checking sprite CLI")
     if shutil.which("sprite"):
-        ok("found")
+        r = run(["sprite", "version"], capture=True, check=False)
+        ok(f"found ({r.stdout.strip()})" if r.returncode == 0 else "found")
         return
     warn("sprite CLI not found -- installing")
     run(["sh", "-c", "curl -fsSL https://sprites.dev/install.sh | sh"])
     if not shutil.which("sprite"):
         os.environ["PATH"] = f"{os.path.expanduser('~/.local/bin')}:{os.environ['PATH']}"
     if not shutil.which("sprite"):
-        fail("sprite CLI install failed")
+        fail("sprite CLI install failed. See https://sprites.dev")
     ok("installed")
 
 def ensure_sprite_login():
@@ -78,6 +80,7 @@ def ensure_sprite_login():
     if r.returncode == 0:
         ok("authenticated")
         return
+    warn("Not logged in")
     input("   Press Enter to open browser for auth...")
     sprite("login")
     if sprite("list", check=False).returncode != 0:
@@ -139,8 +142,8 @@ def install_uv():
 
 def install_nanobot():
     global NANOBOT_BIN
-    info("Installing nanobot + honcho optional dep")
-    sprite_exec("export PATH=$HOME/.local/bin:$PATH && cd /home/sprite/nanobot && uv pip install --system --no-cache -e '.[honcho]'")
+    info("Installing nanobot")
+    sprite_exec("export PATH=$HOME/.local/bin:$PATH && cd /home/sprite/nanobot && uv pip install --system --no-cache -e .")
     r = run(["sprite", "exec", "bash", "-c",
              "export PATH=$HOME/.local/bin:$PATH && python3 -c \"import shutil; print(shutil.which('nanobot'))\""],
             capture=True, check=False)
@@ -153,7 +156,7 @@ def install_nanobot():
     ok(f"installed ({NANOBOT_BIN})")
 
 def write_config():
-    info("Writing config (honcho enabled via override)")
+    info("Writing config")
     config = {
         "providers": {PROVIDER["name"]: {"apiKey": PROVIDER["key"]}},
         "agents": {"defaults": {"model": PROVIDER["model"]}},
@@ -172,11 +175,6 @@ def onboard():
     sprite_exec(f"export HOME=/home/sprite && {NANOBOT_BIN} onboard 2>/dev/null || true")
     ok("done")
 
-def run_honcho_enable():
-    info("Running nanobot honcho enable (writes Honcho-aware prompts)")
-    sprite_exec(f"export HOME=/home/sprite && source /home/sprite/.nanobot/.env && {NANOBOT_BIN} honcho enable", check=False)
-    ok("done")
-
 def register_service():
     info("Registering nanobot service")
     startup = f"#!/bin/bash\nset -a\nsource /home/sprite/.nanobot/.env\nset +a\nexport HOME=/home/sprite\nexec {NANOBOT_BIN} gateway --port 8080\n"
@@ -193,7 +191,7 @@ def summary():
     print()
     print(f"\033[1m== {SPRITE_NAME} deployed ==\033[0m")
     print(f"   Branch:    {BRANCH}")
-    print(f"   Honcho:    optional dep, enabled via config override")
+    print(f"   Honcho:    required dep, enabled by default")
     print(f"   Workspace: {WORKSPACE_ID}")
     print(f"   URL:       {url}")
     print()
@@ -208,8 +206,6 @@ if __name__ == "__main__":
     p.add_argument("--provider-key", help="API key for the chosen provider")
     p.add_argument("--model", help="Model identifier (e.g. anthropic/claude-sonnet-4-5)")
     p.add_argument("--telegram-token"); p.add_argument("--honcho-key")
-    p.add_argument("--fresh", action="store_true", help="Wipe ~/.nanobot before deploy (clean slate)")
-    p.add_argument("--workspace", help=f"Honcho workspace ID (default: {WORKSPACE_ID})")
     args = p.parse_args()
 
     if args.provider:
@@ -221,7 +217,6 @@ if __name__ == "__main__":
         PROVIDER["model"] = args.model or default_model
     if args.telegram_token: os.environ["TELEGRAM_BOT_TOKEN"] = args.telegram_token
     if args.honcho_key: os.environ["HONCHO_API_KEY"] = args.honcho_key
-    if args.workspace: WORKSPACE_ID = args.workspace
 
     ensure_sprite_cli()
     ensure_sprite_login()
@@ -231,15 +226,10 @@ if __name__ == "__main__":
         choose_model()
     collect_keys()
     create_sprite()
-    if args.fresh:
-        info("Wiping ~/.nanobot (--fresh)")
-        sprite_exec("rm -rf /home/sprite/.nanobot", check=False)
-        ok("clean slate")
     clone_repo()
     install_uv()
     install_nanobot()
     write_config()
     onboard()
-    run_honcho_enable()
     register_service()
     summary()

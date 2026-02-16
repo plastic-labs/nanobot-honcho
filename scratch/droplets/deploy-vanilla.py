@@ -1,12 +1,12 @@
 # /// script
 # requires-python = ">=3.10"
 # ///
-"""Deploy nanobot-honcho (feat/honcho-longterm-memory) to a DigitalOcean Droplet.
+"""Deploy vanilla HKUDS/nanobot to a DigitalOcean Droplet.
 
-Honcho is optional on this branch. Script installs it and enables via config.
+Clones upstream nanobot. Skill source is cloned alongside for manual application.
 
 Usage:
-    uv run scratch/droplets/deploy-upstream.py
+    uv run scratch/droplets/deploy-vanilla.py
 """
 
 import json
@@ -16,16 +16,14 @@ import subprocess
 import sys
 import time
 
-DROPLET_NAME = "nb-upstream"
-REPO = "https://github.com/plastic-labs/nanobot-honcho.git"
-BRANCH = "feat/honcho-longterm-memory"
-WORKSPACE_ID = "nanobot-test-upstream"
-REGION = "nyc1"
-SIZE = "s-1vcpu-1gb"
-IMAGE = "ubuntu-24-04-x64"
+DROPLET_NAME = "nb-vanilla"
+VANILLA_REPO = "https://github.com/HKUDS/nanobot.git"
+VANILLA_BRANCH = "main"
+SKILL_REPO = "https://github.com/plastic-labs/nanobot-honcho.git"
+SKILL_BRANCH = "honcho-default"
+WORKSPACE_ID = "nanobot-test-vanilla"
 
 PROVIDERS = [
-    # (config_name, env_var, default_model, description, help_url)
     ("openrouter",  "OPENROUTER_API_KEY",  "anthropic/claude-sonnet-4-5",      "gateway -- any model",  "https://openrouter.ai/keys"),
     ("anthropic",   "ANTHROPIC_API_KEY",   "anthropic/claude-sonnet-4-5",      "Claude models",         "https://console.anthropic.com"),
     ("openai",      "OPENAI_API_KEY",      "openai/gpt-4o",                    "GPT models",            "https://platform.openai.com/api-keys"),
@@ -62,25 +60,17 @@ def ssh(ip, cmd, check=True):
                 f"root@{ip}", cmd], check=check, capture=True)
 
 def ssh_ok(ip, cmd):
-    r = ssh(ip, cmd, check=False)
-    return r.returncode == 0
-
-
-# -- setup ------------------------------------------------------------------
+    return ssh(ip, cmd, check=False).returncode == 0
 
 def ensure_doctl():
     info("Checking doctl CLI")
-    if shutil.which("doctl"):
-        ok("found")
-        return
+    if shutil.which("doctl"): ok("found"); return
     fail("doctl not found. Install: brew install doctl && doctl auth init")
 
 def ensure_doctl_auth():
     info("Checking doctl auth")
-    r = run(["doctl", "account", "get"], check=False, capture=True)
-    if r.returncode == 0:
-        ok("authenticated")
-        return
+    if run(["doctl", "account", "get"], check=False, capture=True).returncode == 0:
+        ok("authenticated"); return
     fail("doctl auth required. Run: doctl auth init")
 
 def get_ssh_key_id():
@@ -127,15 +117,10 @@ def collect_keys():
     ensure_var("TELEGRAM_BOT_TOKEN", "Telegram bot token", "@BotFather on Telegram -> /newbot")
     ensure_var("HONCHO_API_KEY", "Honcho API key", "https://app.honcho.dev")
 
-
-# -- droplet ----------------------------------------------------------------
-
 def get_droplet_ip():
     r = run(["doctl", "compute", "droplet", "get", DROPLET_NAME, "--format", "PublicIPv4", "--no-header"],
             check=False, capture=True)
-    if r.returncode == 0 and r.stdout.strip():
-        return r.stdout.strip()
-    return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
 def create_droplet(ssh_key_id):
     info(f"Creating droplet: {DROPLET_NAME}")
@@ -155,9 +140,8 @@ touch /root/.cloud-init-done
         f.write(cloud_init)
 
     run(["doctl", "compute", "droplet", "create", DROPLET_NAME,
-         "--region", REGION, "--size", SIZE, "--image", IMAGE,
-         "--ssh-keys", ssh_key_id, "--user-data-file", init_path,
-         "--wait"])
+         "--region", "nyc1", "--size", "s-1vcpu-1gb", "--image", "ubuntu-24-04-x64",
+         "--ssh-keys", ssh_key_id, "--user-data-file", init_path, "--wait"])
 
     ip = None
     for _ in range(30):
@@ -171,9 +155,7 @@ touch /root/.cloud-init-done
 def wait_for_ssh(ip):
     info("Waiting for SSH")
     for i in range(30):
-        if ssh_ok(ip, "echo ok"):
-            ok("connected")
-            return
+        if ssh_ok(ip, "echo ok"): ok("connected"); return
         time.sleep(5)
         if i % 3 == 0: dim(f"waiting... ({(i+1)*5}s)")
     fail("SSH timeout")
@@ -181,24 +163,23 @@ def wait_for_ssh(ip):
 def wait_for_cloud_init(ip):
     info("Waiting for cloud-init")
     for i in range(60):
-        if ssh_ok(ip, "test -f /root/.cloud-init-done"):
-            ok("done")
-            return
+        if ssh_ok(ip, "test -f /root/.cloud-init-done"): ok("done"); return
         time.sleep(5)
         if i % 3 == 0: dim(f"waiting... ({(i+1)*5}s)")
     warn("cloud-init may not have finished, continuing anyway")
 
+def clone_repos(ip):
+    info(f"Cloning vanilla nanobot ({VANILLA_REPO} @ {VANILLA_BRANCH})")
+    ssh(ip, f"rm -rf /root/nanobot /root/skill-source && git clone --branch {VANILLA_BRANCH} --single-branch --depth 1 {VANILLA_REPO} /root/nanobot")
+    ok("cloned vanilla")
 
-# -- deploy -----------------------------------------------------------------
-
-def clone_repo(ip):
-    info(f"Cloning {REPO} @ {BRANCH}")
-    ssh(ip, f"rm -rf /root/nanobot && git clone --branch {BRANCH} --single-branch --depth 1 {REPO} /root/nanobot")
-    ok("cloned")
+    info(f"Cloning skill source ({SKILL_REPO} @ {SKILL_BRANCH})")
+    ssh(ip, f"git clone --branch {SKILL_BRANCH} --single-branch --depth 1 {SKILL_REPO} /root/skill-source")
+    ok("cloned skill source")
 
 def install_nanobot(ip):
-    info("Installing nanobot + honcho optional dep")
-    ssh(ip, "export PATH=/root/.local/bin:$PATH && cd /root/nanobot && uv venv /root/nanobot/.venv && uv pip install --no-cache -e '.[honcho]'")
+    info("Installing vanilla nanobot")
+    ssh(ip, "export PATH=/root/.local/bin:$PATH && cd /root/nanobot && uv venv /root/nanobot/.venv && uv pip install --no-cache -e .")
     nanobot_bin = "/root/nanobot/.venv/bin/nanobot"
     r = ssh(ip, f"test -x {nanobot_bin} && echo ok", check=False)
     if r.stdout.strip() != "ok":
@@ -207,23 +188,17 @@ def install_nanobot(ip):
     return nanobot_bin
 
 def write_config(ip):
-    info("Writing config (honcho enabled via override)")
+    info("Writing config")
     config = {
         "providers": {PROVIDER["name"]: {"apiKey": PROVIDER["key"]}},
         "agents": {"defaults": {"model": PROVIDER["model"]}},
         "channels": {"telegram": {"enabled": True, "token": os.environ["TELEGRAM_BOT_TOKEN"], "allowFrom": []}},
-        "honcho": {"enabled": True, "workspaceId": WORKSPACE_ID, "prefetch": True},
         "tools": {"exec": {"timeout": 60}},
     }
     config_json = json.dumps(config, indent=2)
     ssh(ip, f"mkdir -p /root/.nanobot/workspace && cat > /root/.nanobot/config.json << 'ENDJSON'\n{config_json}\nENDJSON")
     ssh(ip, f"echo 'HONCHO_API_KEY={os.environ['HONCHO_API_KEY']}' > /root/.nanobot/.env")
-    ok(f"config.json + .env written ({PROVIDER['name']}/{PROVIDER['model']})")
-
-def run_honcho_enable(ip, nanobot_bin):
-    info("Running nanobot honcho enable (writes Honcho-aware prompts)")
-    ssh(ip, f"export PATH=/root/nanobot/.venv/bin:/root/.local/bin:$PATH && source /root/.nanobot/.env && {nanobot_bin} honcho enable", check=False)
-    ok("done")
+    ok(f"config.json + .env written (honcho NOT enabled -- apply skill first)")
 
 def setup_service(ip, nanobot_bin):
     info("Setting up systemd service")
@@ -258,17 +233,23 @@ def summary(ip):
     print()
     print(f"\033[1m== {DROPLET_NAME} deployed ==\033[0m")
     print(f"   IP:        {ip}")
-    print(f"   Branch:    {BRANCH}")
+    print(f"   Source:    vanilla HKUDS/nanobot (skill source at /root/skill-source)")
     print(f"   Provider:  {PROVIDER['name']}")
     print(f"   Model:     {PROVIDER['model']}")
-    print(f"   Honcho:    optional dep, enabled via config override")
+    print(f"   Honcho:    NOT enabled -- apply skill manually, then enable in config")
     print(f"   Workspace: {WORKSPACE_ID}")
     print()
     print(f"   SSH:       ssh root@{ip}")
     print(f"   Status:    ssh root@{ip} systemctl status nanobot")
     print(f"   Logs:      ssh root@{ip} journalctl -u nanobot -f")
     print(f"   Destroy:   doctl compute droplet delete {DROPLET_NAME} -f")
-
+    print()
+    print("   To apply the Honcho skill manually:")
+    print(f"     ssh root@{ip}")
+    print("     ls /root/skill-source/nanobot/skills/honcho/")
+    print("     # Copy references, patch files, then:")
+    print(f"     # Add honcho config to /root/.nanobot/config.json")
+    print("     systemctl restart nanobot")
 
 if __name__ == "__main__":
     import argparse
@@ -277,8 +258,6 @@ if __name__ == "__main__":
     p.add_argument("--provider-key", help="API key for the chosen provider")
     p.add_argument("--model", help="Model identifier (e.g. anthropic/claude-sonnet-4-5)")
     p.add_argument("--telegram-token"); p.add_argument("--honcho-key")
-    p.add_argument("--fresh", action="store_true", help="Wipe ~/.nanobot before deploy (clean slate)")
-    p.add_argument("--workspace", help=f"Honcho workspace ID (default: {WORKSPACE_ID})")
     args = p.parse_args()
 
     if args.provider:
@@ -290,7 +269,6 @@ if __name__ == "__main__":
         PROVIDER["model"] = args.model or default_model
     if args.telegram_token: os.environ["TELEGRAM_BOT_TOKEN"] = args.telegram_token
     if args.honcho_key: os.environ["HONCHO_API_KEY"] = args.honcho_key
-    if args.workspace: WORKSPACE_ID = args.workspace
 
     ensure_doctl()
     ensure_doctl_auth()
@@ -304,13 +282,8 @@ if __name__ == "__main__":
     ip = create_droplet(ssh_key_id)
     wait_for_ssh(ip)
     wait_for_cloud_init(ip)
-    if args.fresh:
-        info("Wiping ~/.nanobot (--fresh)")
-        ssh(ip, "rm -rf /root/.nanobot", check=False)
-        ok("clean slate")
-    clone_repo(ip)
+    clone_repos(ip)
     nanobot_bin = install_nanobot(ip)
     write_config(ip)
-    run_honcho_enable(ip, nanobot_bin)
     setup_service(ip, nanobot_bin)
     summary(ip)

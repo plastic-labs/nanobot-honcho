@@ -1,12 +1,10 @@
 # /// script
 # requires-python = ">=3.10"
 # ///
-"""Deploy nanobot-honcho (feat/honcho-longterm-memory) to a DigitalOcean Droplet.
-
-Honcho is optional on this branch. Script installs it and enables via config.
+"""Deploy nanobot-honcho (honcho-default) to a DigitalOcean Droplet.
 
 Usage:
-    uv run scratch/droplets/deploy-upstream.py
+    uv run scratch/droplets/deploy-honcho.py
 """
 
 import json
@@ -16,10 +14,10 @@ import subprocess
 import sys
 import time
 
-DROPLET_NAME = "nb-upstream"
+DROPLET_NAME = "nb-honcho"
 REPO = "https://github.com/plastic-labs/nanobot-honcho.git"
-BRANCH = "feat/honcho-longterm-memory"
-WORKSPACE_ID = "nanobot-test-upstream"
+BRANCH = "honcho-default"
+WORKSPACE_ID = "nanobot-test-honcho"
 REGION = "nyc1"
 SIZE = "s-1vcpu-1gb"
 IMAGE = "ubuntu-24-04-x64"
@@ -34,7 +32,8 @@ PROVIDERS = [
     ("groq",        "GROQ_API_KEY",        "groq/llama-3.3-70b-versatile",    "fast inference",        "https://console.groq.com/keys"),
 ]
 
-PROVIDER = {}
+# filled by choose_provider / choose_model
+PROVIDER = {}  # {"name": ..., "env": ..., "key": ..., "model": ...}
 
 
 def run(cmd, check=True, capture=False, **kw):
@@ -81,14 +80,16 @@ def ensure_doctl_auth():
     if r.returncode == 0:
         ok("authenticated")
         return
-    fail("doctl auth required. Run: doctl auth init")
+    warn("Not authenticated")
+    dim("Run: doctl auth init")
+    fail("doctl auth required")
 
 def get_ssh_key_id():
     info("Finding SSH key")
     r = run(["doctl", "compute", "ssh-key", "list", "--format", "ID,Name", "--no-header"], capture=True)
     lines = r.stdout.strip().split("\n")
     if not lines or not lines[0].strip():
-        fail("No SSH keys found. Add one: doctl compute ssh-key import")
+        fail("No SSH keys found in your DO account. Add one: doctl compute ssh-key import")
     key_id = lines[0].split()[0]
     key_name = " ".join(lines[0].split()[1:])
     ok(f"using {key_name} ({key_id})")
@@ -150,6 +151,7 @@ apt-get install -y -qq git curl python3 python3-pip python3-venv > /dev/null 2>&
 curl -LsSf https://astral.sh/uv/install.sh | sh
 touch /root/.cloud-init-done
 """
+    # Write cloud-init to temp file
     init_path = "/tmp/nb-cloud-init.yaml"
     with open(init_path, "w") as f:
         f.write(cloud_init)
@@ -164,7 +166,8 @@ touch /root/.cloud-init-done
         ip = get_droplet_ip()
         if ip: break
         time.sleep(2)
-    if not ip: fail("Could not get droplet IP")
+    if not ip:
+        fail("Could not get droplet IP")
     ok(f"created ({ip})")
     return ip
 
@@ -197,8 +200,8 @@ def clone_repo(ip):
     ok("cloned")
 
 def install_nanobot(ip):
-    info("Installing nanobot + honcho optional dep")
-    ssh(ip, "export PATH=/root/.local/bin:$PATH && cd /root/nanobot && uv venv /root/nanobot/.venv && uv pip install --no-cache -e '.[honcho]'")
+    info("Installing nanobot")
+    ssh(ip, "export PATH=/root/.local/bin:$PATH && cd /root/nanobot && uv venv /root/nanobot/.venv && uv pip install --no-cache -e .")
     nanobot_bin = "/root/nanobot/.venv/bin/nanobot"
     r = ssh(ip, f"test -x {nanobot_bin} && echo ok", check=False)
     if r.stdout.strip() != "ok":
@@ -207,7 +210,7 @@ def install_nanobot(ip):
     return nanobot_bin
 
 def write_config(ip):
-    info("Writing config (honcho enabled via override)")
+    info("Writing config")
     config = {
         "providers": {PROVIDER["name"]: {"apiKey": PROVIDER["key"]}},
         "agents": {"defaults": {"model": PROVIDER["model"]}},
@@ -219,11 +222,6 @@ def write_config(ip):
     ssh(ip, f"mkdir -p /root/.nanobot/workspace && cat > /root/.nanobot/config.json << 'ENDJSON'\n{config_json}\nENDJSON")
     ssh(ip, f"echo 'HONCHO_API_KEY={os.environ['HONCHO_API_KEY']}' > /root/.nanobot/.env")
     ok(f"config.json + .env written ({PROVIDER['name']}/{PROVIDER['model']})")
-
-def run_honcho_enable(ip, nanobot_bin):
-    info("Running nanobot honcho enable (writes Honcho-aware prompts)")
-    ssh(ip, f"export PATH=/root/nanobot/.venv/bin:/root/.local/bin:$PATH && source /root/.nanobot/.env && {nanobot_bin} honcho enable", check=False)
-    ok("done")
 
 def setup_service(ip, nanobot_bin):
     info("Setting up systemd service")
@@ -261,7 +259,7 @@ def summary(ip):
     print(f"   Branch:    {BRANCH}")
     print(f"   Provider:  {PROVIDER['name']}")
     print(f"   Model:     {PROVIDER['model']}")
-    print(f"   Honcho:    optional dep, enabled via config override")
+    print(f"   Honcho:    required dep, enabled by default")
     print(f"   Workspace: {WORKSPACE_ID}")
     print()
     print(f"   SSH:       ssh root@{ip}")
@@ -277,10 +275,9 @@ if __name__ == "__main__":
     p.add_argument("--provider-key", help="API key for the chosen provider")
     p.add_argument("--model", help="Model identifier (e.g. anthropic/claude-sonnet-4-5)")
     p.add_argument("--telegram-token"); p.add_argument("--honcho-key")
-    p.add_argument("--fresh", action="store_true", help="Wipe ~/.nanobot before deploy (clean slate)")
-    p.add_argument("--workspace", help=f"Honcho workspace ID (default: {WORKSPACE_ID})")
     args = p.parse_args()
 
+    # Pre-fill from CLI args
     if args.provider:
         match = [p for p in PROVIDERS if p[0] == args.provider]
         if not match: fail(f"Unknown provider: {args.provider}")
@@ -290,7 +287,6 @@ if __name__ == "__main__":
         PROVIDER["model"] = args.model or default_model
     if args.telegram_token: os.environ["TELEGRAM_BOT_TOKEN"] = args.telegram_token
     if args.honcho_key: os.environ["HONCHO_API_KEY"] = args.honcho_key
-    if args.workspace: WORKSPACE_ID = args.workspace
 
     ensure_doctl()
     ensure_doctl_auth()
@@ -304,13 +300,8 @@ if __name__ == "__main__":
     ip = create_droplet(ssh_key_id)
     wait_for_ssh(ip)
     wait_for_cloud_init(ip)
-    if args.fresh:
-        info("Wiping ~/.nanobot (--fresh)")
-        ssh(ip, "rm -rf /root/.nanobot", check=False)
-        ok("clean slate")
     clone_repo(ip)
     nanobot_bin = install_nanobot(ip)
     write_config(ip)
-    run_honcho_enable(ip, nanobot_bin)
     setup_service(ip, nanobot_bin)
     summary(ip)

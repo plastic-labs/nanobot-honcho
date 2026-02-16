@@ -417,12 +417,17 @@ class AgentLoop:
 
         # Handle slash commands
         cmd = msg.content.strip().lower()
-        if cmd == "/new":
+        if cmd in ("/new", "/clear"):
             # Capture messages before clearing (avoid race condition with background task)
             messages_to_archive = session.messages.copy()
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
+
+            # Rotate Honcho session (preserves old data for user modeling)
+            if self.honcho_active:
+                self._honcho.new_session(msg.session_key)
+                logger.info(f"Rotated Honcho session for {msg.session_key}")
 
             async def _consolidate_and_cleanup():
                 temp_session = Session(key=session.key)
@@ -431,10 +436,10 @@ class AgentLoop:
 
             asyncio.create_task(_consolidate_and_cleanup())
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="New session started. Memory consolidation in progress.")
+                                  content="Session cleared.")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
+                                  content="nanobot commands:\n/new — Start a new conversation\n/clear — Clear session and start fresh\n/help — Show available commands")
 
         # Consolidate memory before processing if session is too large
         if len(session.messages) > self.memory_window:
