@@ -257,7 +257,7 @@ def _write_env_key(api_key: str) -> None:
 
 
 def _write_workspace_prompts(honcho: bool) -> None:
-    """Overwrite workspace prompt files with Honcho-aware or stock versions."""
+    """Write Honcho-aware or stock workspace prompt files, backing up any customized originals."""
     workspace = _get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -274,7 +274,14 @@ def _write_workspace_prompts(honcho: bool) -> None:
         }
 
     for filename, content in templates.items():
-        (workspace / filename).write_text(content)
+        target = workspace / filename
+        if target.exists():
+            existing = target.read_text(encoding="utf-8")
+            if existing.strip() != content.strip():
+                backup = target.with_suffix(f"{target.suffix}.bak")
+                target.rename(backup)
+                console.print(f"  Backed up {filename} -> {backup.name}")
+        target.write_text(content)
         console.print(f"  Updated {filename}")
 
 

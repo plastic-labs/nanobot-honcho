@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class HonchoConfig:
+class HonchoClientConfig:
     """Configuration for Honcho client."""
 
     workspace_id: str = "nanobot"
@@ -21,7 +21,7 @@ class HonchoConfig:
     environment: str = "production"
 
     @classmethod
-    def from_env(cls, workspace_id: str = "nanobot") -> HonchoConfig:
+    def from_env(cls, workspace_id: str = "nanobot") -> HonchoClientConfig:
         """Create config from environment variables."""
         return cls(
             workspace_id=workspace_id,
@@ -33,7 +33,7 @@ class HonchoConfig:
 _honcho_client: Honcho | None = None
 
 
-def get_honcho_client(config: HonchoConfig | None = None) -> Honcho:
+def get_honcho_client(config: HonchoClientConfig | None = None) -> Honcho:
     """
     Get or create the Honcho client singleton.
 
@@ -52,7 +52,7 @@ def get_honcho_client(config: HonchoConfig | None = None) -> Honcho:
         return _honcho_client
 
     if config is None:
-        config = HonchoConfig.from_env()
+        config = HonchoClientConfig.from_env()
 
     if not config.api_key:
         raise ValueError(

@@ -321,14 +321,20 @@ def gateway(
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     
     config = load_config()
+
+    # Warn if Honcho is enabled but API key is missing
+    if config.honcho.enabled and not os.environ.get("HONCHO_API_KEY"):
+        console.print("[yellow]Warning: Honcho is enabled but HONCHO_API_KEY is not set.[/yellow]")
+        console.print("[yellow]  Long-term memory will be inactive. Set the key or run: nanobot honcho disable[/yellow]")
+
     bus = MessageBus()
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
-    
+
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
-    
+
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
@@ -434,7 +440,12 @@ def agent(
     from loguru import logger
     
     config = load_config()
-    
+
+    # Warn if Honcho is enabled but API key is missing
+    if config.honcho.enabled and not os.environ.get("HONCHO_API_KEY"):
+        console.print("[yellow]Warning: Honcho is enabled but HONCHO_API_KEY is not set.[/yellow]")
+        console.print("[yellow]  Long-term memory will be inactive. Set the key or run: nanobot honcho disable[/yellow]")
+
     bus = MessageBus()
     provider = _make_provider(config)
 

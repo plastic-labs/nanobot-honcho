@@ -94,7 +94,7 @@ class AgentLoop:
 
         self._running = False
         self._honcho: HonchoSessionManager | None = None
-        self._honcho_nudged: set[str] = set()  # sessions already nudged about Honcho
+        self._honcho_migrated: set[str] = set()  # sessions already checked for migration
         self._mcp_servers = mcp_servers or {}
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
@@ -107,53 +107,31 @@ class AgentLoop:
         """True when Honcho is initialized and ready."""
         return self._honcho is not None
 
-    @property
-    def _honcho_needs_setup(self) -> bool:
-        """True when Honcho is enabled in config but not active (missing API key or package)."""
-        return (
-            self.honcho_config is not None
-            and self.honcho_config.enabled
-            and not self.honcho_active
-        )
-
-    @property
-    def _honcho_available_not_enabled(self) -> bool:
-        """True when honcho-ai is installed but Honcho is not enabled in config."""
-        if self.honcho_active:
-            return False
-        if self.honcho_config and self.honcho_config.enabled:
-            return False
-        try:
-            import honcho  # noqa: F401
-            return True
-        except ImportError:
-            return False
-
     def _honcho_set_context(self, session_key: str) -> None:
         """Set session context on Honcho tools and ensure the Honcho session exists."""
         if not self.honcho_active:
             return
-        for tool_name in ("query_user_context", "edit_prompt"):
+        for tool_name in ("query_user_context",):
             tool = self.tools.get(tool_name)
             if tool and hasattr(tool, "set_context"):
                 tool.set_context(session_key)
         self._honcho.get_or_create(session_key)
-        self._maybe_migrate_local_session(session_key)
+        if session_key not in self._honcho_migrated:
+            self._honcho_migrated.add(session_key)
+            self._maybe_migrate_local_session(session_key)
 
     def _maybe_migrate_local_session(self, session_key: str) -> None:
         """
-        Auto-migrate local data to Honcho on first activation.
+        Auto-migrate local data to Honcho on first activation per session key.
 
         Migrates both:
         1. JSONL session history (per-session message files)
         2. MEMORY.md + HISTORY.md (consolidated memory from upstream's memory system)
 
-        Runs after get_or_create so the Honcho session and peers are cached.
+        Called once per session key (guarded by _honcho_migrated set in _honcho_set_context).
         Skips if Honcho session already has messages (idempotent).
         Backwards compatible -- gracefully skips files that don't exist.
         """
-        from pathlib import Path
-
         honcho_session = self._honcho.get_or_create(session_key)
         if honcho_session.messages:
             return
@@ -300,12 +278,11 @@ class AgentLoop:
             import os
             if os.environ.get("HONCHO_API_KEY"):
                 try:
-                    from nanobot.honcho.client import get_honcho_client, HonchoConfig as HClientConfig
+                    from nanobot.honcho.client import get_honcho_client, HonchoClientConfig
                     from nanobot.honcho.session import HonchoSessionManager
                     from nanobot.agent.tools.honcho import HonchoTool
-                    from nanobot.agent.tools.prompt_edit import HonchoGuidedEditTool
 
-                    client_config = HClientConfig(
+                    client_config = HonchoClientConfig(
                         workspace_id=self.honcho_config.workspace_id,
                         api_key=os.environ["HONCHO_API_KEY"],
                         environment=self.honcho_config.environment,
@@ -316,12 +293,8 @@ class AgentLoop:
                     )
 
                     self.tools.register(HonchoTool(session_manager=self._honcho))
-                    self.tools.register(HonchoGuidedEditTool(
-                        session_manager=self._honcho,
-                        workspace=self.workspace,
-                    ))
 
-                    logger.info("Honcho tools registered (query_user_context, edit_prompt)")
+                    logger.info("Honcho tools registered (query_user_context)")
                 except ImportError:
                     logger.warning("Honcho enabled but honcho-ai not installed. Run: nanobot honcho enable")
                 except Exception as e:
@@ -493,39 +466,6 @@ class AgentLoop:
         if honcho_context and initial_messages and initial_messages[0].get("role") == "system":
             initial_messages[0]["content"] += honcho_context
 
-        # Honcho onboarding: if enabled but not active, ask user for API key on first message
-        if self._honcho_needs_setup and not session.messages and initial_messages and initial_messages[0].get("role") == "system":
-            initial_messages[0]["content"] += (
-                "\n\n# Setup Required\n\n"
-                "Long-term memory is enabled but your Honcho API key is missing. "
-                "Greet the user, then let them know they need to add their Honcho API key "
-                "to finish setup. They can get one at https://app.honcho.dev -- "
-                "once they have it, their admin should set HONCHO_API_KEY in the environment.\n\n"
-                "Do NOT attempt to diagnose, fix, or configure this yourself. "
-                "Do NOT read config files, run pip, or suggest systemctl commands. "
-                "Just let the user know and move on to normal conversation."
-            )
-
-        # Soft Honcho nudge: if honcho-ai is installed but not enabled,
-        # casually mention it after a few exchanges (once per session)
-        session_key_for_nudge = session_key or msg.session_key
-        if (
-            self._honcho_available_not_enabled
-            and session_key_for_nudge not in self._honcho_nudged
-            and len(session.messages) >= 4  # ~2 exchanges (2 user + 2 assistant)
-            and initial_messages
-            and initial_messages[0].get("role") == "system"
-        ):
-            self._honcho_nudged.add(session_key_for_nudge)
-            initial_messages[0]["content"] += (
-                "\n\nBTW: there is an optional long-term memory provider you can enable called Honcho. "
-                "Casually mention it to the user in your response -- something like "
-                "\"by the way, I can enable long-term memory with Honcho if you're interested.\" "
-                "If they want to know more, let them know they can get an API key at https://app.honcho.dev "
-                "and then their admin can set HONCHO_API_KEY in the environment and enable it in config. "
-                "Keep it brief and natural, not a sales pitch. Only mention it once."
-            )
-
         # Run agent loop
         final_content, tools_used = await self._run_agent_loop(initial_messages)
 
@@ -540,10 +480,12 @@ class AgentLoop:
         session.add_message("user", msg.content)
         session.add_message("assistant", final_content,
                             tools_used=tools_used if tools_used else None)
-        self.sessions.save(session)
 
-        # Sync to Honcho
-        self._honcho_sync(msg.session_key, msg.content, final_content)
+        if self.honcho_active:
+            # Honcho is the source of truth -- sync there, keep local session as in-memory window only
+            self._honcho_sync(msg.session_key, msg.content, final_content)
+        else:
+            self.sessions.save(session)
 
         return OutboundMessage(
             channel=msg.channel,
@@ -592,10 +534,11 @@ class AgentLoop:
         user_content = f"[System: {msg.sender_id}] {msg.content}"
         session.add_message("user", user_content)
         session.add_message("assistant", final_content)
-        self.sessions.save(session)
 
-        # Sync to Honcho
-        self._honcho_sync(session_key, user_content, final_content)
+        if self.honcho_active:
+            self._honcho_sync(session_key, user_content, final_content)
+        else:
+            self.sessions.save(session)
 
         return OutboundMessage(
             channel=origin_channel,
