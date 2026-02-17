@@ -83,14 +83,54 @@ def ensure_doctl_auth():
         return
     fail("doctl auth required. Run: doctl auth init")
 
-def get_ssh_key_id():
+def get_ssh_key_id(selected_name=None, selected_id=None):
     info("Finding SSH key")
+    if selected_name and selected_id:
+        fail("Use only one of --ssh-key-name or --ssh-key-id")
     r = run(["doctl", "compute", "ssh-key", "list", "--format", "ID,Name", "--no-header"], capture=True)
-    lines = r.stdout.strip().split("\n")
-    if not lines or not lines[0].strip():
+    lines = [line.strip() for line in r.stdout.strip().split("\n") if line.strip()]
+    if not lines:
         fail("No SSH keys found. Add one: doctl compute ssh-key import")
-    key_id = lines[0].split()[0]
-    key_name = " ".join(lines[0].split()[1:])
+
+    keys = []
+    for line in lines:
+        parts = line.split()
+        key_id = parts[0]
+        key_name = " ".join(parts[1:]) if len(parts) > 1 else ""
+        keys.append((key_id, key_name))
+
+    if selected_id:
+        for key_id, key_name in keys:
+            if key_id == selected_id:
+                ok(f"using {key_name} ({key_id})")
+                return key_id
+        fail(f"SSH key id not found: {selected_id}")
+
+    if selected_name:
+        for key_id, key_name in keys:
+            if key_name == selected_name:
+                ok(f"using {key_name} ({key_id})")
+                return key_id
+        fail(f"SSH key name not found: {selected_name}")
+
+    if len(keys) == 1:
+        key_id, key_name = keys[0]
+        ok(f"using {key_name} ({key_id})")
+        return key_id
+
+    warn("Multiple SSH keys found")
+    for i, (key_id, key_name) in enumerate(keys, 1):
+        print(f"   {i}. {key_name} ({key_id})")
+    if not sys.stdin.isatty():
+        fail("Multiple SSH keys available. Use --ssh-key-name or --ssh-key-id.")
+    choice = input("   Select SSH key number: ").strip()
+    try:
+        idx = int(choice) - 1
+        if not (0 <= idx < len(keys)):
+            raise ValueError
+    except ValueError:
+        fail(f"Invalid SSH key selection: {choice}")
+    key_id, key_name = keys[idx]
     ok(f"using {key_name} ({key_id})")
     return key_id
 
@@ -137,14 +177,39 @@ def get_droplet_ip():
         return r.stdout.strip()
     return None
 
+def ensure_uv_ready(ip):
+    info("Checking uv on remote host")
+    preflight = "export PATH=/root/.local/bin:$PATH && command -v uv >/dev/null 2>&1 && uv --version"
+    r = ssh(ip, preflight, check=False)
+    if r.returncode == 0:
+        ok(f"uv ready ({r.stdout.strip().splitlines()[-1]})")
+        return
+
+    warn("uv not found; bootstrapping remotely")
+    bootstrap = (
+        "export PATH=/root/.local/bin:$PATH && "
+        "curl -LsSf https://astral.sh/uv/install.sh | sh && "
+        "command -v uv >/dev/null 2>&1 && "
+        "uv --version"
+    )
+    r = ssh(ip, bootstrap, check=False)
+    if r.returncode != 0:
+        if r.stdout.strip():
+            dim(r.stdout.strip())
+        if r.stderr.strip():
+            warn(r.stderr.strip())
+        fail("uv bootstrap failed")
+    ok(f"uv ready ({r.stdout.strip().splitlines()[-1]})")
+
 def create_droplet(ssh_key_id):
     info(f"Creating droplet: {DROPLET_NAME}")
     existing_ip = get_droplet_ip()
     if existing_ip:
         ok(f"already exists ({existing_ip})")
-        return existing_ip
+        return existing_ip, False
 
     cloud_init = """#!/bin/bash
+set -euo pipefail
 apt-get update -qq
 apt-get install -y -qq git curl python3 python3-pip python3-venv > /dev/null 2>&1
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -166,7 +231,7 @@ touch /root/.cloud-init-done
         time.sleep(2)
     if not ip: fail("Could not get droplet IP")
     ok(f"created ({ip})")
-    return ip
+    return ip, True
 
 def wait_for_ssh(ip):
     info("Waiting for SSH")
@@ -186,7 +251,8 @@ def wait_for_cloud_init(ip):
             return
         time.sleep(5)
         if i % 3 == 0: dim(f"waiting... ({(i+1)*5}s)")
-    warn("cloud-init may not have finished, continuing anyway")
+    warn("cloud-init did not finish in time")
+    ensure_uv_ready(ip)
 
 
 # -- deploy -----------------------------------------------------------------
@@ -198,6 +264,7 @@ def clone_repo(ip):
 
 def install_nanobot(ip):
     info("Installing nanobot + honcho optional dep")
+    ensure_uv_ready(ip)
     ssh(ip, "export PATH=/root/.local/bin:$PATH && cd /root/nanobot && uv venv /root/nanobot/.venv && uv pip install --no-cache -e '.[honcho]'")
     nanobot_bin = "/root/nanobot/.venv/bin/nanobot"
     r = ssh(ip, f"test -x {nanobot_bin} && echo ok", check=False)
@@ -279,6 +346,9 @@ if __name__ == "__main__":
     p.add_argument("--telegram-token"); p.add_argument("--honcho-key")
     p.add_argument("--fresh", action="store_true", help="Wipe ~/.nanobot before deploy (clean slate)")
     p.add_argument("--workspace", help=f"Honcho workspace ID (default: {WORKSPACE_ID})")
+    p.add_argument("--droplet-name", help=f"DigitalOcean droplet name (default: {DROPLET_NAME})")
+    p.add_argument("--ssh-key-name", help="DigitalOcean SSH key name to use (e.g. molt)")
+    p.add_argument("--ssh-key-id", help="DigitalOcean SSH key id to use")
     args = p.parse_args()
 
     if args.provider:
@@ -291,19 +361,24 @@ if __name__ == "__main__":
     if args.telegram_token: os.environ["TELEGRAM_BOT_TOKEN"] = args.telegram_token
     if args.honcho_key: os.environ["HONCHO_API_KEY"] = args.honcho_key
     if args.workspace: WORKSPACE_ID = args.workspace
+    if args.droplet_name: DROPLET_NAME = args.droplet_name
 
     ensure_doctl()
     ensure_doctl_auth()
-    ssh_key_id = get_ssh_key_id()
+    ssh_key_id = get_ssh_key_id(selected_name=args.ssh_key_name, selected_id=args.ssh_key_id)
 
     if not PROVIDER.get("name"):
         choose_provider()
         choose_model()
     collect_keys()
 
-    ip = create_droplet(ssh_key_id)
+    ip, was_created = create_droplet(ssh_key_id)
     wait_for_ssh(ip)
-    wait_for_cloud_init(ip)
+    if was_created:
+        wait_for_cloud_init(ip)
+    else:
+        info("Droplet already exists; skipping cloud-init wait")
+        ensure_uv_ready(ip)
     if args.fresh:
         info("Wiping ~/.nanobot (--fresh)")
         ssh(ip, "rm -rf /root/.nanobot", check=False)
