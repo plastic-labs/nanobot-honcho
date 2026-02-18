@@ -287,7 +287,6 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     honcho: HonchoConfig = Field(default_factory=HonchoConfig)
 
-
     @property
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""
