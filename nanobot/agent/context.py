@@ -225,14 +225,18 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         Returns:
             Updated message list.
         """
-        msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
-        
+        msg: dict[str, Any] = {"role": "assistant"}
+
+        # Omit empty content — some backends reject empty text blocks
+        if content:
+            msg["content"] = content
+
         if tool_calls:
             msg["tool_calls"] = tool_calls
-        
-        # Thinking models reject history without this
+
+        # Include reasoning content when provided (required by some thinking models)
         if reasoning_content:
             msg["reasoning_content"] = reasoning_content
-        
+
         messages.append(msg)
         return messages
