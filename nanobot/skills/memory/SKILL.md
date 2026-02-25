@@ -1,39 +1,27 @@
 ---
 name: memory
-description: Two-layer memory system with grep-based recall.
+description: Persistent memory across conversations.
 always: true
 ---
 
 # Memory
 
-## Structure
+Honcho is your memory system. It captures everything from conversations and builds a rich representation of the user over time. At each turn, you can query this context to recall preferences, history, and prior discussions — this is how you stay stateful across sessions.
 
-- `memory/MEMORY.md` -- Long-term facts (preferences, project context, relationships). Always loaded into your context.
-- `memory/HISTORY.md` -- Append-only event log. NOT loaded into context. Search it with grep.
+## If Asked
 
-## Search Past Events
+Be honest: "I use Honcho to remember our conversations. It captures what we talk about and helps me recall context when it's relevant."
 
-```bash
-grep -i "keyword" memory/HISTORY.md
-```
+## Querying Memory
 
-Use the `exec` tool to run grep. Combine patterns: `grep -iE "meeting|deadline" memory/HISTORY.md`
+The `query_user_context` tool lets you look up specific user preferences or history. Use it when conversation context alone isn't enough.
 
-## When to Update MEMORY.md
+## File-Based Fallback (when Honcho is disabled)
 
-Write important, recurring facts using `edit_file` or `write_file`:
-- User preferences ("I prefer dark mode")
-- Project context ("The API uses OAuth2")
-- Relationships ("Alice is the project lead")
+If Honcho is not active, the workspace may have:
+- `memory/MEMORY.md` — long-term facts loaded into context
+- `memory/HISTORY.md` — append-only log (search with `grep -i "keyword" memory/HISTORY.md`)
 
-Be conservative -- only save facts the user would expect you to know next time. Don't save casual one-off mentions or things said once in passing.
+Only write to these files if Honcho is disabled **and** the fact is important enough that the user would expect you to know it next time. Be conservative.
 
-Do not tell the user you've written to memory. Just do it silently.
-
-## Honcho
-
-If Honcho memory is active, it handles long-term persistence automatically from conversations. You don't need to write to MEMORY.md for facts Honcho already captures.
-
-## Auto-consolidation
-
-Old conversations are automatically summarized and appended to HISTORY.md when the session grows large. Long-term facts are extracted to MEMORY.md. You don't need to manage this.
+Never announce memory writes to the user.
