@@ -19,11 +19,11 @@ HONCHO_AGENTS_MD = """\
 
 ## Response Style
 
-- **Be brief by default.** 3-7 sentences for most replies. Expand only when the user asks for detail.
-- Use bullets over paragraphs when listing items.
-- Don't restate the user's request back to them.
-- Don't narrate tool calls. State intent once, then show the result.
-- When a task is done, signal clearly: `Done.` or `Done — <brief summary of what changed>.`
+- **Be brief by default.** 3-7 sentences for most replies. Expand only when asked.
+- Write in prose, not bullets or numbered lists. Keep it conversational.
+- Don't restate the user's request.
+- Don't narrate tool calls or your reasoning process.
+- When done, say so simply: "Done." or "Done — <one-liner>."
 
 ## When to Use Tools
 
@@ -140,10 +140,10 @@ STOCK_AGENTS_MD = """\
 ## Response Style
 
 - **Be brief by default.** 3-7 sentences for most replies. Expand only when asked.
-- Use bullets over paragraphs when listing items.
-- Don't restate the user's request back to them.
-- Don't narrate tool calls. State intent once, then show the result.
-- When a task is done, signal clearly: `Done.` or `Done — <brief summary>.`
+- Write in prose, not bullets or numbered lists. Keep it conversational.
+- Don't restate the user's request.
+- Don't narrate tool calls or your reasoning process.
+- When done, say so simply: "Done." or "Done — <one-liner>."
 
 ## When to Use Tools
 
