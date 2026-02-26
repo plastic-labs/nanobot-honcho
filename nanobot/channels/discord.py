@@ -78,8 +78,22 @@ class DiscordChannel(BaseChannel):
             logger.warning("Discord HTTP client not initialized")
             return
 
+        # Check if this is a response to a slash command interaction
+        interaction_token = msg.metadata.get("interaction_token")
+        application_id = msg.metadata.get("application_id")
+        if interaction_token and application_id:
+            url = f"{DISCORD_API_BASE}/webhooks/{application_id}/{interaction_token}/messages/@original"
+            payload: dict[str, Any] = {"content": msg.content}
+            headers = {"Authorization": f"Bot {self.config.token}"}
+            try:
+                response = await self._http.patch(url, headers=headers, json=payload)
+                response.raise_for_status()
+            except Exception as e:
+                logger.error(f"Error responding to Discord interaction: {e}")
+            return
+
         url = f"{DISCORD_API_BASE}/channels/{msg.chat_id}/messages"
-        payload: dict[str, Any] = {"content": msg.content}
+        payload = {"content": msg.content}
 
         if msg.reply_to:
             payload["message_reference"] = {"message_id": msg.reply_to}
@@ -136,6 +150,8 @@ class DiscordChannel(BaseChannel):
                 logger.info("Discord gateway READY")
             elif op == 0 and event_type == "MESSAGE_CREATE":
                 await self._handle_message_create(payload)
+            elif op == 0 and event_type == "INTERACTION_CREATE":
+                await self._handle_interaction(payload)
             elif op == 7:
                 # RECONNECT: exit loop to reconnect
                 logger.info("Discord gateway requested reconnect")
@@ -235,6 +251,60 @@ class DiscordChannel(BaseChannel):
                 "message_id": str(payload.get("id", "")),
                 "guild_id": payload.get("guild_id"),
                 "reply_to": reply_to,
+            },
+        )
+
+    async def _handle_interaction(self, payload: dict[str, Any]) -> None:
+        """Handle Discord slash command interactions."""
+        if not self._http:
+            return
+
+        interaction_id = payload.get("id")
+        interaction_token = payload.get("token")
+        interaction_type = payload.get("type")
+
+        # Type 2 = APPLICATION_COMMAND
+        if interaction_type != 2:
+            return
+
+        data = payload.get("data") or {}
+        command_name = data.get("name", "")
+
+        user = payload.get("user") or payload.get("member", {}).get("user") or {}
+        sender_id = str(user.get("id", ""))
+        channel_id = str(payload.get("channel_id", ""))
+
+        if not sender_id or not channel_id:
+            return
+
+        if not self.is_allowed(sender_id):
+            return
+
+        # Acknowledge and respond to the interaction
+        url = f"{DISCORD_API_BASE}/interactions/{interaction_id}/{interaction_token}/callback"
+        headers = {"Authorization": f"Bot {self.config.token}"}
+
+        # Forward as a message to the agent loop (prepend / for slash command handling)
+        content = f"/{command_name}"
+
+        # Defer the response first (gives us time to process)
+        defer_payload = {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+        try:
+            await self._http.post(url, headers=headers, json=defer_payload)
+        except Exception as e:
+            logger.warning(f"Failed to defer Discord interaction: {e}")
+            return
+
+        # Process via message bus
+        application_id = payload.get("application_id", "")
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=channel_id,
+            content=content,
+            metadata={
+                "interaction_token": interaction_token,
+                "interaction_id": interaction_id,
+                "application_id": application_id,
             },
         )
 

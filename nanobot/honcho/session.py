@@ -297,6 +297,10 @@ class HonchoSessionManager:
             return True
         return False
 
+    def invalidate(self, key: str) -> None:
+        """Remove a session from the in-memory cache (alias for delete)."""
+        self._cache.pop(key, None)
+
     def new_session(self, key: str) -> HonchoSession:
         """
         Create a new session, preserving the old one for user modeling.
