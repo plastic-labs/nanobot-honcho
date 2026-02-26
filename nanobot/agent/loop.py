@@ -428,18 +428,20 @@ class AgentLoop:
             if self.honcho_active:
                 self._honcho.new_session(msg.session_key)
                 logger.info(f"Rotated Honcho session for {msg.session_key}")
+            else:
+                # Only consolidate to file-based memory when Honcho is not active
+                async def _consolidate_and_cleanup():
+                    temp_session = Session(key=session.key)
+                    temp_session.messages = messages_to_archive
+                    await self._consolidate_memory(temp_session, archive_all=True)
 
-            async def _consolidate_and_cleanup():
-                temp_session = Session(key=session.key)
-                temp_session.messages = messages_to_archive
-                await self._consolidate_memory(temp_session, archive_all=True)
-
-            asyncio.create_task(_consolidate_and_cleanup())
+                asyncio.create_task(_consolidate_and_cleanup())
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="Session cleared.")
+                                  content="Session cleared.", metadata=msg.metadata)
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="nanobot commands:\n/new — Start a new conversation\n/clear — Clear session and start fresh\n/help — Show available commands")
+                                  content="nanobot commands:\n/new — Start a new conversation\n/clear — Clear session and start fresh\n/help — Show available commands",
+                                  metadata=msg.metadata)
 
         # Consolidate memory before processing if session is too large
         if len(session.messages) > self.memory_window:
