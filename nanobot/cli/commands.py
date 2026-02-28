@@ -976,5 +976,143 @@ def provider_login(
         raise typer.Exit(1)
 
 
+# ============================================================================
+# Convos Commands
+# ============================================================================
+
+convos_app = typer.Typer(help="Manage Convos channel")
+app.add_typer(convos_app, name="convos")
+
+
+@convos_app.command("join")
+def convos_join(
+    invite: str = typer.Argument(..., help="Convos invite slug or URL"),
+    profile_name: str = typer.Option("Nanobot", "--profile-name", "-n", help="Display name in the conversation"),
+    env: str = typer.Option("production", "--env", "-e", help="XMTP environment (production or dev)"),
+):
+    """Join a Convos conversation and save the conversation ID to config.
+
+    The invite can be:
+    - Full URL: https://popup.convos.org/v2?i=Cm8K...
+    - Just the slug: Cm8KPwEM...
+
+    Note: The full URL format may cause parsing issues. If you get errors,
+    extract just the slug (the part after 'i=') and use that instead.
+    """
+    import shutil
+    import subprocess
+    import re
+    from urllib.parse import urlparse, parse_qs
+    from nanobot.config.loader import load_config, save_config
+
+    # Check if convos CLI is installed
+    if not shutil.which("convos"):
+        console.print("[red]convos-cli not found.[/red]")
+        console.print("\nInstall it with:")
+        console.print("  [cyan]npm install -g @xmtp/convos-cli[/cyan]")
+        console.print("\nThen initialize:")
+        console.print("  [cyan]convos init --env production[/cyan]")
+        raise typer.Exit(1)
+
+    # Extract slug from URL if needed
+    invite_slug = invite
+
+    # Strip shell escape backslashes (common when copy-pasting from terminal)
+    cleaned_invite = invite.replace("\\?", "?").replace("\\=", "=").replace("\\&", "&")
+
+    if cleaned_invite.startswith("http"):
+        try:
+            parsed = urlparse(cleaned_invite)
+            qs = parse_qs(parsed.query)
+            if "i" in qs:
+                invite_slug = qs["i"][0]
+                console.print(f"[dim]Extracted invite slug from URL[/dim]")
+        except Exception:
+            pass  # Use as-is if parsing fails
+
+    console.print(f"{__logo__} Joining Convos conversation...")
+    console.print(f"  Profile: {profile_name}")
+    console.print(f"  Environment: {env}")
+    console.print()
+
+    # Join the conversation
+    try:
+        result = subprocess.run(
+            ["convos", "conversations", "join", invite_slug, "--profile-name", profile_name, "--env", env],
+            capture_output=True,
+            text=True,
+            timeout=120,  # 2 minute timeout for join acceptance
+        )
+
+        output = result.stdout + result.stderr
+        console.print(output)
+
+        if result.returncode != 0:
+            console.print("[red]Failed to join conversation[/red]")
+            if "invalid wire type" in output.lower():
+                console.print("\n[yellow]Hint: If you passed a full URL, try just the invite slug instead.[/yellow]")
+                console.print("[yellow]Extract the part after 'i=' in the URL.[/yellow]")
+            raise typer.Exit(1)
+
+        # Extract conversation ID from output
+        # Look for patterns like "conversationId  abc123" (tab-separated from CLI output)
+        conv_id_match = re.search(r'conversationId\s+([a-f0-9]+)', output, re.IGNORECASE)
+
+        if not conv_id_match:
+            console.print("[yellow]Warning: Could not extract conversation ID from output.[/yellow]")
+            console.print("You may need to manually add the conversation_id to your config.")
+            raise typer.Exit(1)
+
+        conversation_id = conv_id_match.group(1)
+
+        # Update config
+        config = load_config()
+        config.channels.convos.enabled = True
+        config.channels.convos.conversation_id = conversation_id
+        config.channels.convos.profile_name = profile_name
+        config.channels.convos.env = env
+        save_config(config)
+
+        console.print(f"\n[green]✓[/green] Joined conversation: {conversation_id}")
+        console.print(f"[green]✓[/green] Convos channel enabled in config")
+        console.print(f"\nStart the gateway to connect:")
+        console.print("  [cyan]nanobot gateway[/cyan]")
+
+    except subprocess.TimeoutExpired:
+        console.print("[red]Timeout waiting for join request to be accepted.[/red]")
+        console.print("The conversation creator needs to accept your join request.")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@convos_app.command("status")
+def convos_status():
+    """Show Convos channel status."""
+    from nanobot.config.loader import load_config
+
+    config = load_config()
+    convos = config.channels.convos
+
+    console.print(f"{__logo__} Convos Channel Status\n")
+
+    table = Table()
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value")
+
+    table.add_row("Enabled", "[green]✓[/green]" if convos.enabled else "[red]✗[/red]")
+    table.add_row("Conversation ID", convos.conversation_id[:24] + "..." if convos.conversation_id else "[dim]not set[/dim]")
+    table.add_row("Profile Name", convos.profile_name)
+    table.add_row("Environment", convos.env)
+
+    console.print(table)
+
+    if not convos.conversation_id:
+        console.print("\n[yellow]No conversation configured.[/yellow]")
+        console.print("Join a conversation with:")
+        console.print('  [cyan]nanobot convos join "https://popup.convos.org/..."[/cyan]')
+
+
 if __name__ == "__main__":
     app()

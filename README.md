@@ -104,6 +104,76 @@ All upstream channels are supported. See [upstream docs](https://github.com/HKUD
 
 Telegram, Discord, WhatsApp, Feishu, Mochat, DingTalk, Slack, Email, QQ.
 
+#### Convos (XMTP)
+
+Chat with your bot in [Convos](https://convos.org) — a decentralized group chat app built on [XMTP](https://xmtp.org).
+
+**Prerequisites:**
+- Install convos-cli: `npm install -g @xmtp/convos-cli`
+- Initialize the CLI: `convos init --env production`
+
+**Setup:**
+
+```bash
+# Join a conversation using an invite URL
+nanobot convos join "https://convos.org/invite?i=abc123..."
+
+# Start the gateway
+nanobot gateway
+```
+
+The `join` command extracts the invite slug automatically and saves the conversation ID to your config. Your bot will appear with the profile name "Nanobot" by default.
+
+**Configuration:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `channels.convos.enabled` | `false` | Enable Convos channel |
+| `channels.convos.conversationId` | `""` | Set by `nanobot convos join` |
+| `channels.convos.profileName` | `"Nanobot"` | Display name in conversation |
+| `channels.convos.env` | `"production"` | XMTP environment (`production` or `dev`) |
+
+**CLI Commands:**
+
+```bash
+nanobot convos join <url>    # Join conversation and save config
+nanobot convos status        # Check connection status
+```
+
+#### XMTP (Direct Messages)
+
+For direct wallet-to-wallet messaging via XMTP (outside of Convos), a Node.js bridge is required.
+
+**Prerequisites:**
+- Node.js 22+
+- Generate an Ethereum wallet key (any wallet, no funding required)
+
+**Setup:**
+
+```bash
+cd bridge-xmtp
+cp .env.example .env
+# Edit .env with your wallet key and DB encryption key
+npm install
+npm start
+```
+
+Then enable in config:
+
+```json
+{
+  "channels": {
+    "xmtp": {
+      "enabled": true,
+      "bridgeUrl": "http://localhost:18792",
+      "callbackPort": 18791
+    }
+  }
+}
+```
+
+The bridge logs your agent's wallet address on startup — users can message this address via [xmtp.chat](https://xmtp.chat) or any XMTP-compatible app.
+
 ### MCP
 
 nanobot supports [MCP](https://modelcontextprotocol.io/) for external tool servers. Config format is compatible with Claude Desktop / Cursor. See [upstream docs](https://github.com/HKUDS/nanobot#mcp-model-context-protocol).
