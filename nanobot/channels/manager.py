@@ -136,7 +136,31 @@ class ChannelManager:
                 logger.info("QQ channel enabled")
             except ImportError as e:
                 logger.warning(f"QQ channel not available: {e}")
-    
+
+        # XMTP channel
+        if self.config.channels.xmtp.enabled:
+            try:
+                from nanobot.channels.xmtp import XmtpChannel
+                self.channels["xmtp"] = XmtpChannel(
+                    self.config.channels.xmtp,
+                    self.bus,
+                )
+                logger.info("XMTP channel enabled")
+            except ImportError as e:
+                logger.warning(f"XMTP channel not available: {e}")
+
+        # Convos channel
+        if self.config.channels.convos.enabled:
+            try:
+                from nanobot.channels.convos import ConvosChannel
+                self.channels["convos"] = ConvosChannel(
+                    self.config.channels.convos,
+                    self.bus,
+                )
+                logger.info("Convos channel enabled")
+            except ImportError as e:
+                logger.warning(f"Convos channel not available: {e}")
+
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""
         try:
