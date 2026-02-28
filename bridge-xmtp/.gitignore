@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables (contains secrets)
+.env
+
+# XMTP database files (contains private state)
+data/*.db3
+data/*.db3-shm
+data/*.db3-wal
