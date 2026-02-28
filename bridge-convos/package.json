@@ -1,0 +1,14 @@
+{
+  "name": "nanobot-convos-bridge",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Convos bridge for nanobot-honcho using convos-cli",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

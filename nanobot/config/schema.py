@@ -142,6 +142,23 @@ class QQConfig(BaseModel):
     allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
 
 
+class XmtpConfig(BaseModel):
+    """XMTP channel configuration using Node.js bridge."""
+    enabled: bool = False
+    bridge_url: str = "http://localhost:18792"  # URL to Node.js XMTP bridge
+    callback_port: int = 18791  # Port for Python HTTP server to receive inbound messages
+    allow_from: list[str] = Field(default_factory=list)  # Allowed wallet addresses (empty = allow all)
+
+
+class ConvosConfig(BaseModel):
+    """Convos channel configuration using convos-cli."""
+    enabled: bool = False
+    conversation_id: str = ""  # Conversation ID (obtained via `nanobot convos join`)
+    profile_name: str = "Nanobot"  # Display name in the conversation
+    env: str = "production"  # XMTP environment: "production" or "dev"
+    allow_from: list[str] = Field(default_factory=list)  # Allowed sender names (empty = allow all)
+
+
 class ChannelsConfig(BaseModel):
     """Configuration for chat channels."""
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
@@ -153,6 +170,8 @@ class ChannelsConfig(BaseModel):
     email: EmailConfig = Field(default_factory=EmailConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
+    xmtp: XmtpConfig = Field(default_factory=XmtpConfig)
+    convos: ConvosConfig = Field(default_factory=ConvosConfig)
 
 
 class AgentDefaults(BaseModel):
