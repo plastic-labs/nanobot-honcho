@@ -223,13 +223,13 @@ class HonchoSessionManager:
             logger.debug(f"Key map resolved {key} -> {resolved_key} (cache hit)")
             return self._cache[resolved_key]
 
-        # Parse resolved key to extract user identifier
-        # Format: channel:chat_id (e.g., "telegram:123456789")
-        parts = resolved_key.split(":", 1)
-        channel = parts[0] if len(parts) > 1 else "default"
-        chat_id = parts[1] if len(parts) > 1 else resolved_key
+        # Parse the ORIGINAL key for stable peer identity
+        # (resolved_key may have a rotation timestamp suffix — peers must be stable across rotations)
+        original_parts = key.split(":", 1)
+        channel = original_parts[0] if len(original_parts) > 1 else "default"
+        chat_id = original_parts[1] if len(original_parts) > 1 else key
 
-        # Create peer IDs (sanitized for Honcho's ID pattern)
+        # Create peer IDs (stable across session rotations)
         user_peer_id = self._sanitize_id(f"user-{channel}-{chat_id}")
         assistant_peer_id = "nanobot-assistant"
 
