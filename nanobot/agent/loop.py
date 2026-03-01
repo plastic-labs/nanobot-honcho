@@ -107,7 +107,7 @@ class AgentLoop:
         """True when Honcho is initialized and ready."""
         return self._honcho is not None
 
-    def _honcho_set_context(self, session_key: str) -> None:
+    def _honcho_set_context(self, session_key: str, user_id: str | None = None) -> None:
         """Set session context on Honcho tools and ensure the Honcho session exists."""
         if not self.honcho_active:
             return
@@ -115,7 +115,7 @@ class AgentLoop:
             tool = self.tools.get(tool_name)
             if tool and hasattr(tool, "set_context"):
                 tool.set_context(session_key)
-        self._honcho.get_or_create(session_key)
+        self._honcho.get_or_create(session_key, user_id=user_id)
         if session_key not in self._honcho_migrated:
             self._honcho_migrated.add(session_key)
             self._maybe_migrate_local_session(session_key)
@@ -456,8 +456,8 @@ class AgentLoop:
         # Update tool contexts
         self._set_tool_context(msg.channel, msg.chat_id)
 
-        # Honcho: set tool contexts + prefetch user context + synthesize narrative
-        self._honcho_set_context(msg.session_key)
+        # Honcho: set tool contexts + prefetch user context
+        self._honcho_set_context(msg.session_key, user_id=msg.sender_id)
         honcho_context = self._honcho_prefetch(msg.session_key, msg.content)
 
         # Build initial messages

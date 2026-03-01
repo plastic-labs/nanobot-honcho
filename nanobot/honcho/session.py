@@ -203,12 +203,15 @@ class HonchoSessionManager:
         """Sanitize an ID to match Honcho's pattern: ^[a-zA-Z0-9_-]+"""
         return re.sub(r'[^a-zA-Z0-9_-]', '-', id_str)
 
-    def get_or_create(self, key: str) -> HonchoSession:
+    def get_or_create(self, key: str, user_id: str | None = None) -> HonchoSession:
         """
         Get an existing session or create a new one.
 
         Args:
             key: Session key (usually channel:chat_id).
+            user_id: The actual user identifier (e.g., Discord user ID).
+                     When provided, used for stable peer identity instead
+                     of the chat_id from the session key.
 
         Returns:
             The session.
@@ -223,14 +226,14 @@ class HonchoSessionManager:
             logger.debug(f"Key map resolved {key} -> {resolved_key} (cache hit)")
             return self._cache[resolved_key]
 
-        # Parse the ORIGINAL key for stable peer identity
-        # (resolved_key may have a rotation timestamp suffix — peers must be stable across rotations)
+        # Parse the ORIGINAL key for channel info
         original_parts = key.split(":", 1)
         channel = original_parts[0] if len(original_parts) > 1 else "default"
-        chat_id = original_parts[1] if len(original_parts) > 1 else key
 
-        # Create peer IDs (stable across session rotations)
-        user_peer_id = self._sanitize_id(f"user-{channel}-{chat_id}")
+        # Peer ID uses the actual user identity (stable across channels and rotations)
+        # Falls back to chat_id from session key if user_id not provided
+        peer_identity = user_id or (original_parts[1] if len(original_parts) > 1 else key)
+        user_peer_id = self._sanitize_id(f"user-{channel}-{peer_identity}")
         assistant_peer_id = "nanobot-assistant"
 
         # Sanitize session ID for Honcho (use resolved key so rotations stick)
