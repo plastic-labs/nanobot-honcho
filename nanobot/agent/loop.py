@@ -111,7 +111,7 @@ class AgentLoop:
         """Set session context on Honcho tools and ensure the Honcho session exists."""
         if not self.honcho_active:
             return
-        for tool_name in ("query_user_context",):
+        for tool_name in ("recall",):
             tool = self.tools.get(tool_name)
             if tool and hasattr(tool, "set_context"):
                 tool.set_context(session_key)
@@ -280,7 +280,7 @@ class AgentLoop:
                 try:
                     from nanobot.honcho.client import get_honcho_client, HonchoClientConfig
                     from nanobot.honcho.session import HonchoSessionManager
-                    from nanobot.agent.tools.honcho import HonchoTool
+                    from nanobot.agent.tools.honcho import RecallTool
 
                     client_config = HonchoClientConfig(
                         workspace_id=self.honcho_config.workspace_id,
@@ -292,9 +292,9 @@ class AgentLoop:
                         context_tokens=self.honcho_config.context_tokens,
                     )
 
-                    self.tools.register(HonchoTool(session_manager=self._honcho))
+                    self.tools.register(RecallTool(session_manager=self._honcho))
 
-                    logger.info("Honcho tools registered (query_user_context)")
+                    logger.info("Honcho tools registered (recall)")
                 except ImportError:
                     logger.warning("Honcho enabled but honcho-ai not installed. Run: nanobot honcho enable")
                 except Exception as e:
@@ -456,7 +456,7 @@ class AgentLoop:
         # Update tool contexts
         self._set_tool_context(msg.channel, msg.chat_id)
 
-        # Honcho: set tool contexts + prefetch user context
+        # Honcho: set tool contexts + prefetch user context + synthesize narrative
         self._honcho_set_context(msg.session_key)
         honcho_context = self._honcho_prefetch(msg.session_key, msg.content)
 
@@ -467,6 +467,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            honcho_active=self.honcho_active,
         )
 
         # Inject Honcho context into system prompt
@@ -532,6 +533,7 @@ class AgentLoop:
             current_message=msg.content,
             channel=origin_channel,
             chat_id=origin_chat_id,
+            honcho_active=self.honcho_active,
         )
         final_content, _ = await self._run_agent_loop(initial_messages)
 

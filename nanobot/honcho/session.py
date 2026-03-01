@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from loguru import logger
@@ -76,6 +77,10 @@ class HonchoSessionManager:
     AI-native memory system for user modeling.
     """
 
+    # Persistent file mapping original keys to their rotated (timestamped) keys.
+    # This survives restarts so /clear rotations aren't lost.
+    _KEY_MAP_FILE = Path.home() / ".nanobot" / "honcho_session_keys.json"
+
     def __init__(self, honcho: Honcho | None = None, context_tokens: int | None = None):
         """
         Initialize the session manager.
@@ -89,6 +94,28 @@ class HonchoSessionManager:
         self._cache: dict[str, HonchoSession] = {}
         self._peers_cache: dict[str, Any] = {}
         self._sessions_cache: dict[str, Any] = {}
+        self._key_map: dict[str, str] = self._load_key_map()
+
+    # ── Persistent key mapping ───────────────────────────────────────
+
+    @classmethod
+    def _load_key_map(cls) -> dict[str, str]:
+        """Load the persistent key map from disk."""
+        import json as _json
+        if cls._KEY_MAP_FILE.exists():
+            try:
+                return _json.loads(cls._KEY_MAP_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+        return {}
+
+    def _save_key_map(self) -> None:
+        """Persist the key map to disk."""
+        import json as _json
+        self._KEY_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self._KEY_MAP_FILE.write_text(
+            _json.dumps(self._key_map, indent=2), encoding="utf-8"
+        )
 
     @property
     def honcho(self) -> Honcho:
@@ -140,7 +167,7 @@ class HonchoSessionManager:
         # Configure peer observation settings
         from honcho.session import SessionPeerConfig
         user_config = SessionPeerConfig(observe_me=True, observe_others=True)
-        ai_config = SessionPeerConfig(observe_me=False, observe_others=True)
+        ai_config = SessionPeerConfig(observe_me=True, observe_others=True)
 
         session.add_peers([(user_peer, user_config), (assistant_peer, ai_config)])
 
@@ -190,18 +217,24 @@ class HonchoSessionManager:
             logger.debug(f"Local session cache hit: {key}")
             return self._cache[key]
 
-        # Parse key to extract user identifier
+        # Resolve through key map (survives restarts after /clear rotation)
+        resolved_key = self._key_map.get(key, key)
+        if resolved_key != key and resolved_key in self._cache:
+            logger.debug(f"Key map resolved {key} -> {resolved_key} (cache hit)")
+            return self._cache[resolved_key]
+
+        # Parse resolved key to extract user identifier
         # Format: channel:chat_id (e.g., "telegram:123456789")
-        parts = key.split(":", 1)
+        parts = resolved_key.split(":", 1)
         channel = parts[0] if len(parts) > 1 else "default"
-        chat_id = parts[1] if len(parts) > 1 else key
+        chat_id = parts[1] if len(parts) > 1 else resolved_key
 
         # Create peer IDs (sanitized for Honcho's ID pattern)
         user_peer_id = self._sanitize_id(f"user-{channel}-{chat_id}")
         assistant_peer_id = "nanobot-assistant"
 
-        # Sanitize session ID for Honcho
-        honcho_session_id = self._sanitize_id(key)
+        # Sanitize session ID for Honcho (use resolved key so rotations stick)
+        honcho_session_id = self._sanitize_id(resolved_key)
 
         # Get or create peers
         user_peer = self._get_or_create_peer(user_peer_id)
@@ -233,6 +266,8 @@ class HonchoSessionManager:
         )
 
         self._cache[key] = session
+        if resolved_key != key:
+            self._cache[resolved_key] = session
         return session
 
     def save(self, session: HonchoSession) -> None:
@@ -306,7 +341,8 @@ class HonchoSessionManager:
         Create a new session, preserving the old one for user modeling.
 
         This creates a fresh session with a new ID while keeping the old
-        session's data in Honcho for continued user modeling.
+        session's data in Honcho for continued user modeling. The rotation
+        is persisted to disk so it survives restarts.
 
         Args:
             key: Original session key (e.g., "discord:123456").
@@ -317,22 +353,26 @@ class HonchoSessionManager:
         import time
 
         # Remove old session from caches (but don't delete from Honcho)
-        old_session = self._cache.pop(key, None)
-        if old_session:
-            self._sessions_cache.pop(old_session.honcho_session_id, None)
+        old_key = self._key_map.get(key, key)
+        self._cache.pop(key, None)
+        self._cache.pop(old_key, None)
+        old_session_id = self._sanitize_id(old_key)
+        self._sessions_cache.pop(old_session_id, None)
 
         # Create new session with timestamp suffix
         # This preserves old session in Honcho while starting fresh
         timestamp = int(time.time())
         new_key = f"{key}:{timestamp}"
 
+        # Persist the rotation so it survives restarts
+        self._key_map[key] = new_key
+        self._save_key_map()
+
         # Get or create will create a fresh session
         session = self.get_or_create(new_key)
 
-        # Cache under both original key (for future lookups) and timestamped
-        # key (so session.key matches a valid cache entry)
+        # Cache under original key too (for future lookups this run)
         self._cache[key] = session
-        self._cache[new_key] = session
 
         logger.info(f"Created new session for {key} (honcho: {session.honcho_session_id})")
         return session
@@ -561,6 +601,29 @@ class HonchoSessionManager:
                 logger.error(f"Failed to upload {filename} to Honcho: {e}")
 
         return uploaded
+
+    def get_agent_context(self, session_key: str, query: str) -> str:
+        """
+        Query Honcho's dialectic chat for agent self-context.
+
+        Args:
+            session_key: The session key to get context for.
+            query: Natural language question the agent asks about itself.
+
+        Returns:
+            Honcho's response about the agent.
+        """
+        session = self._cache.get(session_key)
+        if not session:
+            return "No session found for this context."
+
+        assistant_peer = self._get_or_create_peer(session.assistant_peer_id)
+
+        try:
+            return assistant_peer.chat(query)
+        except Exception as e:
+            logger.error(f"Failed to get agent context from Honcho: {e}")
+            return f"Unable to retrieve agent context: {e}"
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """

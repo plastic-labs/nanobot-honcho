@@ -14,7 +14,15 @@ Be honest: "I use Honcho to remember our conversations. It captures what we talk
 
 ## Querying Memory
 
-The `query_user_context` tool lets you look up specific user preferences or history. Use it when conversation context alone isn't enough.
+The `recall` tool lets you look up specific user preferences or history.
+
+**Always query memory immediately when:**
+- The user asks what you know/remember about them
+- The user asks about their preferences, history, or past conversations
+- The user references something you "should" know from before
+- You're about to say "I don't know anything about you" or similar
+
+Don't explain your capabilities and then fail to use them. Query first, then respond.
 
 ## File-Based Fallback (when Honcho is disabled)
 

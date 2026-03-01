@@ -13,43 +13,53 @@ from nanobot.agent.skills import SkillsLoader
 class ContextBuilder:
     """
     Builds the context (system prompt + messages) for the agent.
-    
+
     Assembles bootstrap files, memory, skills, and conversation history
     into a coherent prompt for the LLM.
     """
-    
+
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
-    
+
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
-    
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
+
+    # ── System prompt ────────────────────────────────────────────────
+
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        honcho_active: bool = False,
+    ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
-        
+
         Args:
             skill_names: Optional list of skills to include.
-        
+            honcho_active: When True, use slim identity (no personality)
+                          and skip SOUL.md/USER.md/memory.
+
         Returns:
             Complete system prompt.
         """
         parts = []
-        
-        # Core identity
-        parts.append(self._get_identity())
-        
-        # Bootstrap files
-        bootstrap = self._load_bootstrap_files()
+
+        # Core identity (slim when Honcho provides narrative turns)
+        parts.append(self._get_identity(slim=honcho_active))
+
+        # Bootstrap files (skip USER/memory when Honcho active — SOUL.md always loads as lore)
+        skip = {"USER.md"} if honcho_active else set()
+        bootstrap = self._load_bootstrap_files(skip=skip)
         if bootstrap:
             parts.append(bootstrap)
-        
-        # Memory context
-        memory = self.memory.get_memory_context()
-        if memory:
-            parts.append(f"# Memory\n\n{memory}")
-        
+
+        # Memory context (only when Honcho is NOT active)
+        if not honcho_active:
+            memory = self.memory.get_memory_context()
+            if memory:
+                parts.append(f"# Memory\n\n{memory}")
+
         # Skills - progressive loading
         # 1. Always-loaded skills: include full content
         always_skills = self.skills.get_always_skills()
@@ -57,7 +67,7 @@ class ContextBuilder:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
-        
+
         # 2. Available skills: only show summary (agent uses read_file to load)
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
@@ -67,11 +77,17 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
 
 {skills_summary}""")
-        
+
         return "\n\n---\n\n".join(parts)
-    
-    def _get_identity(self) -> str:
-        """Get the core identity section."""
+
+    def _get_identity(self, slim: bool = False) -> str:
+        """
+        Get the core identity section.
+
+        Args:
+            slim: When True, return only runtime info (time, workspace, tool
+                  guidelines). Personality is provided via narrative turns.
+        """
         from datetime import datetime
         import time as _time
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
@@ -79,7 +95,24 @@ Skills with available="false" need dependencies installed first - you can try in
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-        
+
+        if slim:
+            return f"""# nanobot
+
+## Current Time
+{now} ({tz})
+
+## Runtime
+{runtime}
+
+## Workspace
+Your workspace is at: {workspace_path}
+- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+
+IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
+Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
+For normal conversation, just respond with text - do not call the message tool."""
+
         return f"""# nanobot
 
 You are nanobot, a helpful AI assistant. You have access to tools that allow you to:
@@ -108,19 +141,29 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
 ## User-facing communication
 - If the user asks how your memory works, answer simply: you remember things from conversations over time. Do not mention file names, paths, or internal tools.
 - Do not announce when you write to memory or take internal actions. Just do it."""
-    
-    def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
+
+    def _load_bootstrap_files(self, skip: set[str] | None = None) -> str:
+        """
+        Load bootstrap files from workspace.
+
+        Args:
+            skip: Set of filenames to skip (e.g., {"SOUL.md", "USER.md"}).
+        """
+        skip = skip or set()
         parts = []
-        
+
         for filename in self.BOOTSTRAP_FILES:
+            if filename in skip:
+                continue
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")
-        
+
         return "\n\n".join(parts) if parts else ""
-    
+
+    # ── Message assembly ─────────────────────────────────────────────
+
     def build_messages(
         self,
         history: list[dict[str, Any]],
@@ -129,6 +172,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        honcho_active: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -140,6 +184,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
             media: Optional list of local file paths for images/media.
             channel: Current channel (telegram, feishu, etc.).
             chat_id: Current chat/user ID.
+            honcho_active: Whether Honcho is active (slim system prompt).
 
         Returns:
             List of messages including system prompt.
@@ -147,7 +192,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         messages = []
 
         # System prompt
-        system_prompt = self.build_system_prompt(skill_names)
+        system_prompt = self.build_system_prompt(skill_names, honcho_active=honcho_active)
         if channel and chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
         messages.append({"role": "system", "content": system_prompt})
@@ -165,7 +210,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         """Build user message content with optional base64-encoded images."""
         if not media:
             return text
-        
+
         images = []
         for path in media:
             p = Path(path)
@@ -174,11 +219,11 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
                 continue
             b64 = base64.b64encode(p.read_bytes()).decode()
             images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-        
+
         if not images:
             return text
         return images + [{"type": "text", "text": text}]
-    
+
     def add_tool_result(
         self,
         messages: list[dict[str, Any]],
@@ -188,13 +233,13 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
     ) -> list[dict[str, Any]]:
         """
         Add a tool result to the message list.
-        
+
         Args:
             messages: Current message list.
             tool_call_id: ID of the tool call.
             tool_name: Name of the tool.
             result: Tool execution result.
-        
+
         Returns:
             Updated message list.
         """
@@ -205,7 +250,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
             "content": result
         })
         return messages
-    
+
     def add_assistant_message(
         self,
         messages: list[dict[str, Any]],
@@ -215,24 +260,24 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
     ) -> list[dict[str, Any]]:
         """
         Add an assistant message to the message list.
-        
+
         Args:
             messages: Current message list.
             content: Message content.
             tool_calls: Optional tool calls.
             reasoning_content: Thinking output (Kimi, DeepSeek-R1, etc.).
-        
+
         Returns:
             Updated message list.
         """
         msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
-        
+
         if tool_calls:
             msg["tool_calls"] = tool_calls
-        
+
         # Thinking models reject history without this
         if reasoning_content:
             msg["reasoning_content"] = reasoning_content
-        
+
         messages.append(msg)
         return messages
