@@ -294,7 +294,14 @@ class AgentLoop:
 
                     self.tools.register(RecallTool(session_manager=self._honcho))
 
-                    logger.info("Honcho tools registered (recall)")
+                    # Vault read tool (searches markdown files in workspace/vault/)
+                    vault_path = self.workspace / "vault"
+                    if vault_path.is_dir():
+                        from nanobot.vault.tool import VaultReadTool
+                        self.tools.register(VaultReadTool(vault_path))
+                        logger.info("Honcho tools registered (recall, vault_read)")
+                    else:
+                        logger.info("Honcho tools registered (recall)")
                 except ImportError:
                     logger.warning("Honcho enabled but honcho-ai not installed. Run: nanobot honcho enable")
                 except Exception as e:

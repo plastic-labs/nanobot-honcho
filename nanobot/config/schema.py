@@ -261,6 +261,13 @@ class HonchoConfig(BaseModel):
     environment: str = "production"
 
 
+class VaultConfig(BaseModel):
+    """Knowledge vault integration (requires plastic-vault installed)."""
+    enabled: bool = False
+    vault_path: str = "./vault"
+    sync_strategy: str = "git"  # obsidian-headless | git | filesystem
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
@@ -269,7 +276,8 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     honcho: HonchoConfig = Field(default_factory=HonchoConfig)
-    
+    vault: VaultConfig = Field(default_factory=VaultConfig)
+
     @property
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""

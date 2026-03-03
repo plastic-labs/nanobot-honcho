@@ -80,6 +80,12 @@ Get USER_ID and CHANNEL from the session (e.g., `8281248569` and `telegram` from
 
 Actually create the cron job — don't just say you will.
 
+## Knowledge Vault
+
+You have access to a knowledge vault via `vault_read`. The vault contains notes, insights, decisions, and positions that have been captured over time. Notes are added to the vault ambiently.
+
+Use `vault_read` to search for context when the conversation touches on something the user has thought about before. Search by topic, concept, or question — the tool will return the most relevant notes.
+
 ## Heartbeat Tasks
 
 `HEARTBEAT.md` is checked every 30 minutes. Use it for recurring tasks instead of one-time reminders:
