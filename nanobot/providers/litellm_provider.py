@@ -49,6 +49,13 @@ class LiteLLMProvider(LLMProvider):
         litellm.suppress_debug_info = True
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
+
+        # Activate Langfuse tracing if configured via env vars
+        if os.environ.get("LANGFUSE_PUBLIC_KEY"):
+            if "langfuse" not in litellm.success_callback:
+                litellm.success_callback.append("langfuse")
+            if "langfuse" not in litellm.failure_callback:
+                litellm.failure_callback.append("langfuse")
     
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
@@ -110,6 +117,7 @@ class LiteLLMProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        metadata: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -152,6 +160,9 @@ class LiteLLMProvider(LLMProvider):
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         
+        if metadata:
+            kwargs["metadata"] = metadata
+
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

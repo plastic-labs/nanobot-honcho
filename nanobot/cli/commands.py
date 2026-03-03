@@ -7,6 +7,9 @@ from pathlib import Path
 import select
 import sys
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
@@ -403,7 +406,13 @@ def gateway(
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
     
     console.print(f"[green]✓[/green] Heartbeat: every 30m")
-    
+
+    # Langfuse tracing status
+    langfuse_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    if langfuse_key:
+        langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        console.print(f"[green]✓[/green] Langfuse: tracing to {langfuse_host}")
+
     async def run():
         try:
             await cron.start()
@@ -901,6 +910,14 @@ def status():
             console.print(f"Honcho: [yellow]config enabled but HONCHO_API_KEY not set[/yellow]")
         else:
             console.print(f"Honcho: [dim]disabled[/dim]")
+
+        # Check Langfuse status
+        langfuse_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+        langfuse_host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        if langfuse_key:
+            console.print(f"Langfuse: [green]enabled[/green] ({langfuse_host})")
+        else:
+            console.print(f"Langfuse: [dim]disabled[/dim]")
 
 
 # ============================================================================

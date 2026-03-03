@@ -309,12 +309,17 @@ class AgentLoop:
 
     # ── Agent iteration loop ────────────────────────────────────────
 
-    async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str]]:
+    async def _run_agent_loop(
+        self,
+        initial_messages: list[dict],
+        metadata: dict | None = None,
+    ) -> tuple[str | None, list[str]]:
         """
         Run the agent iteration loop.
 
         Args:
             initial_messages: Starting messages for the LLM conversation.
+            metadata: Optional trace metadata forwarded to the LLM provider.
 
         Returns:
             Tuple of (final_content, list_of_tools_used).
@@ -333,6 +338,7 @@ class AgentLoop:
                 model=self.model,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+                metadata=metadata,
             )
 
             if response.has_tool_calls:
@@ -482,7 +488,13 @@ class AgentLoop:
             initial_messages[0]["content"] += honcho_context
 
         # Run agent loop
-        final_content, tools_used = await self._run_agent_loop(initial_messages)
+        trace_metadata = {
+            "session_key": key,
+            "channel": msg.channel,
+            "chat_id": msg.chat_id,
+            "sender_id": msg.sender_id,
+        }
+        final_content, tools_used = await self._run_agent_loop(initial_messages, metadata=trace_metadata)
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
@@ -542,7 +554,13 @@ class AgentLoop:
             chat_id=origin_chat_id,
             honcho_active=self.honcho_active,
         )
-        final_content, _ = await self._run_agent_loop(initial_messages)
+        trace_metadata = {
+            "session_key": session_key,
+            "channel": origin_channel,
+            "chat_id": origin_chat_id,
+            "sender_id": msg.sender_id,
+        }
+        final_content, _ = await self._run_agent_loop(initial_messages, metadata=trace_metadata)
 
         if final_content is None:
             final_content = "Background task completed."
@@ -621,6 +639,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
+                metadata={"task": "memory_consolidation"},
             )
             text = (response.content or "").strip()
             if not text:
