@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -124,6 +125,21 @@ class HonchoSessionManager:
             self._honcho = get_honcho_client()
         return self._honcho
 
+    @staticmethod
+    def _call_with_backoff(fn, *args, retries: int = 3, **kwargs):
+        """Call *fn* with exponential backoff on rate-limit (429) errors."""
+        for attempt in range(retries):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:
+                if "rate limit" in str(exc).lower() or "429" in str(exc):
+                    wait = 0.5 * (2 ** attempt)
+                    logger.debug(f"Rate limited, retrying in {wait:.1f}s ({attempt + 1}/{retries})")
+                    _time.sleep(wait)
+                else:
+                    raise
+        return fn(*args, **kwargs)  # final attempt, let it raise
+
     def _get_or_create_peer(self, peer_id: str) -> Any:
         """
         Get or create a Honcho peer.
@@ -174,7 +190,9 @@ class HonchoSessionManager:
         # Load existing messages via context() - single call for messages + metadata
         existing_messages = []
         try:
-            ctx = session.context(summary=True, tokens=self._context_tokens)
+            ctx = self._call_with_backoff(
+                session.context, summary=True, tokens=self._context_tokens
+            )
             existing_messages = ctx.messages or []
 
             # Verify chronological ordering
@@ -427,7 +445,8 @@ class HonchoSessionManager:
 
         try:
             # Single API call to get user representation with semantic search
-            ctx = honcho_session.context(
+            ctx = self._call_with_backoff(
+                honcho_session.context,
                 summary=False,
                 tokens=self._context_tokens,
                 peer_target=session.user_peer_id,
