@@ -71,15 +71,18 @@ Send a message to the user (used internally).
 message(content: str, channel: str = None, chat_id: str = None) -> str
 ```
 
-## Background Tasks
+## Subagents
 
 ### spawn
-Spawn a subagent to handle a task in the background.
+Spawn a subagent to handle a task.
 ```
-spawn(task: str, label: str = None) -> str
+spawn(task: str, label: str = None, wait: bool = false) -> str
 ```
 
-Use for complex or time-consuming tasks that can run independently. The subagent will complete the task and report back when done.
+- `wait=true` — block until the subagent finishes and return its result directly. Use when you need the result to keep reasoning.
+- `wait=false` (default) — run in the background. The subagent reports back when done.
+
+Subagents have their own isolated context with file, shell, and web tools. They cannot access your conversation history, so include all necessary context in the task description.
 
 ## Scheduled Reminders (Cron)
 

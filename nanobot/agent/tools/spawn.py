@@ -33,11 +33,13 @@ class SpawnTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Spawn a subagent to handle a task in the background. "
-            "Use this for complex or time-consuming tasks that can run independently. "
-            "The subagent will complete the task and report back when done."
+            "Spawn a subagent to handle a task. "
+            "Set wait=true to block until the subagent finishes and get its result "
+            "directly (use for tasks you need before continuing). "
+            "Set wait=false (default) to run in the background — the subagent "
+            "will report back when done."
         )
-    
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
@@ -51,12 +53,19 @@ class SpawnTool(Tool):
                     "type": "string",
                     "description": "Optional short label for the task (for display)",
                 },
+                "wait": {
+                    "type": "boolean",
+                    "description": "If true, block until the subagent completes and return its result directly. If false (default), run in the background.",
+                    "default": False,
+                },
             },
             "required": ["task"],
         }
-    
-    async def execute(self, task: str, label: str | None = None, **kwargs: Any) -> str:
+
+    async def execute(self, task: str, label: str | None = None, wait: bool = False, **kwargs: Any) -> str:
         """Spawn a subagent to execute the given task."""
+        if wait:
+            return await self._manager.run_sync(task=task, label=label)
         return await self._manager.spawn(
             task=task,
             label=label,

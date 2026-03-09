@@ -6,6 +6,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+# Regex to match and extract scratchpad blocks from agent responses
+_SCRATCHPAD_RE = re.compile(
+    r"\s*<scratchpad>\s*(.*?)\s*</scratchpad>\s*",
+    re.DOTALL,
+)
+
 
 class ContextBuilder:
     """
@@ -17,6 +23,7 @@ class ContextBuilder:
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
+        self._scratchpads: dict[str, str] = {}  # session_key -> last scratchpad
 
     # ── Message assembly ─────────────────────────────────────────────
 
@@ -26,6 +33,7 @@ class ContextBuilder:
         history: list[dict[str, Any]] | None = None,
         honcho_context: dict[str, Any] | None = None,
         media: list[str] | None = None,
+        session_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -33,8 +41,9 @@ class ContextBuilder:
         Message array structure:
           1. Lore turns from SOUL.md (identity narrative)
           2. Honcho context injection (peer_representation, peer_card, summary)
-          3. Session history messages
-          4. Current user message
+          3. Scratchpad from previous turn (if any)
+          4. Session history messages
+          5. Current user message
 
         Args:
             current_message: The new user message.
@@ -44,6 +53,7 @@ class ContextBuilder:
                 - peer_card: list[str] | str | None
                 - summary: str | None
             media: Optional list of local file paths for images/media.
+            session_key: Session key for scratchpad lookup.
 
         Returns:
             List of messages for the LLM.
@@ -80,15 +90,44 @@ class ContextBuilder:
                     "content": "Got it, I have context on you and a summary of where we left off. Ready.",
                 })
 
-        # 3. Session history
+        # 3. Scratchpad from previous turn
+        if session_key:
+            scratchpad = self._scratchpads.get(session_key)
+            if scratchpad:
+                messages.append({
+                    "role": "user",
+                    "content": f"<system>Your scratchpad from last turn:\n{scratchpad}</system>",
+                })
+                messages.append({
+                    "role": "assistant",
+                    "content": "Got it, I have my working context. Continuing.",
+                })
+
+        # 4. Session history
         if history:
             messages.extend(history)
 
-        # 4. Current message (with optional image attachments)
+        # 5. Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)
         messages.append({"role": "user", "content": user_content})
 
         return messages
+
+    # ── Scratchpad ─────────────────────────────────────────────────────
+
+    def extract_scratchpad(self, content: str, session_key: str) -> str:
+        """
+        Extract and store scratchpad block from agent response.
+
+        Strips the <scratchpad>...</scratchpad> block from the content,
+        stores it for injection into the next turn, and returns the
+        cleaned content (without the scratchpad) for delivery to the user.
+        """
+        match = _SCRATCHPAD_RE.search(content)
+        if match:
+            self._scratchpads[session_key] = match.group(1).strip()
+            content = _SCRATCHPAD_RE.sub("", content).strip()
+        return content
 
     # ── Lore parsing ─────────────────────────────────────────────────
 

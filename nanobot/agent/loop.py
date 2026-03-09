@@ -497,6 +497,7 @@ class AgentLoop:
             history=session.get_history(max_messages=self.memory_window),
             honcho_context=honcho_context,
             media=msg.media if msg.media else None,
+            session_key=key,
         )
 
         # Run agent loop
@@ -511,6 +512,9 @@ class AgentLoop:
         if final_content is None:
             logger.error("Agent loop returned None content even after forced summary")
             final_content = "I ran into an issue generating a response. Could you try again?"
+
+        # Extract scratchpad (stored for next turn, stripped from user-facing content)
+        final_content = self.context.extract_scratchpad(final_content, key)
 
         # Log response preview
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content

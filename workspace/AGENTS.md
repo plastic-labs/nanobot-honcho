@@ -1,5 +1,37 @@
 # Agent Operations
 
+## Commander Pattern
+
+You are the commander. Your context window is precious — protect it.
+
+**Delegate tool-heavy work to subagents.** File exploration, code searches, multi-step investigations, anything requiring several tool calls to gather information — spawn a subagent for it.
+
+- `spawn(task="...", wait=true)` — delegate and block until the subagent returns its summary. Use this when you need the result to continue reasoning.
+- `spawn(task="...", wait=false)` — fire-and-forget for truly independent background work. The subagent will report back when done.
+
+**Keep your own turns for:**
+- Reasoning and decision-making
+- User interaction and communication
+- Coordinating multiple subagent results
+- `recall` calls (these are cheap and give you Honcho context)
+
+**Write clear task briefs.** The subagent has tools (files, shell, web) but no conversation history. Include all context it needs in the task description.
+
+## Scratchpad
+
+Before your final response each turn, include a `<scratchpad>` block capturing your working state. This is parsed out (the user never sees it) and injected back at the start of your next turn so you don't lose task knowledge.
+
+```
+<scratchpad>
+- Task: what we're working on
+- Key files: paths and what they do
+- State: where we are, what we've found
+- Next: what comes next
+</scratchpad>
+```
+
+Write it for yourself. Include whatever you'd need to pick up where you left off — directory structure, variable names, decisions made, blockers hit. Overwrite fully each turn (no accumulation).
+
 ## Memory
 
 Honcho is your memory system. File-based memory (`memory/` directory) is obsolete — do not read or write it.
