@@ -82,16 +82,19 @@ class HonchoSessionManager:
     # This survives restarts so /clear rotations aren't lost.
     _KEY_MAP_FILE = Path.home() / ".nanobot" / "honcho_session_keys.json"
 
-    def __init__(self, honcho: Honcho | None = None, context_tokens: int | None = None):
+    def __init__(self, honcho: Honcho | None = None, context_tokens: int | None = None, user_peer_id: str | None = None):
         """
         Initialize the session manager.
 
         Args:
             honcho: Optional Honcho client. If not provided, uses the singleton.
             context_tokens: Max tokens for context() calls (None = Honcho default).
+            user_peer_id: Fixed peer ID for the user. When set, bypasses
+                channel-based peer derivation so all sessions share one peer.
         """
         self._honcho = honcho
         self._context_tokens = context_tokens
+        self._user_peer_id = user_peer_id
         self._cache: dict[str, HonchoSession] = {}
         self._peers_cache: dict[str, Any] = {}
         self._sessions_cache: dict[str, Any] = {}
@@ -221,6 +224,15 @@ class HonchoSessionManager:
         """Sanitize an ID to match Honcho's pattern: ^[a-zA-Z0-9_-]+"""
         return re.sub(r'[^a-zA-Z0-9_-]', '-', id_str)
 
+    def _resolve_user_peer_id(self, session_key: str) -> str:
+        """Resolve the user peer ID — fixed from config or derived from session key."""
+        if self._user_peer_id:
+            return self._sanitize_id(self._user_peer_id)
+        parts = session_key.split(":", 1)
+        channel = parts[0] if len(parts) > 1 else "default"
+        chat_id = parts[1] if len(parts) > 1 else session_key
+        return self._sanitize_id(f"user-{channel}-{chat_id}")
+
     def get_or_create(self, key: str, user_id: str | None = None) -> HonchoSession:
         """
         Get an existing session or create a new one.
@@ -246,12 +258,14 @@ class HonchoSessionManager:
 
         # Parse the ORIGINAL key for channel info
         original_parts = key.split(":", 1)
-        channel = original_parts[0] if len(original_parts) > 1 else "default"
 
-        # Peer ID uses the actual user identity (stable across channels and rotations)
-        # Falls back to chat_id from session key if user_id not provided
-        peer_identity = user_id or (original_parts[1] if len(original_parts) > 1 else key)
-        user_peer_id = self._sanitize_id(f"user-{channel}-{peer_identity}")
+        # Use fixed peer ID from config, or derive from channel + user identity
+        if self._user_peer_id:
+            user_peer_id = self._sanitize_id(self._user_peer_id)
+        else:
+            channel = original_parts[0] if len(original_parts) > 1 else "default"
+            peer_identity = user_id or (original_parts[1] if len(original_parts) > 1 else key)
+            user_peer_id = self._sanitize_id(f"user-{channel}-{peer_identity}")
         assistant_peer_id = "nanobot-assistant"
 
         # Sanitize session ID for Honcho (use resolved key so rotations stick)
@@ -444,20 +458,21 @@ class HonchoSessionManager:
             return {}
 
         try:
-            # Single API call to get user representation with semantic search
+            # Single API call to get user representation, summary, and semantic search
             ctx = self._call_with_backoff(
                 honcho_session.context,
-                summary=False,
+                summary=True,
                 tokens=self._context_tokens,
                 peer_target=session.user_peer_id,
                 search_query=user_message,
             )
-            # peer_card is list[str] in SDK v2, join for prompt injection
             card = ctx.peer_card or []
             card_str = "\n".join(card) if isinstance(card, list) else str(card)
+            summary_str = ctx.summary.content if ctx.summary else ""
             return {
                 "representation": ctx.peer_representation or "",
                 "card": card_str,
+                "summary": summary_str,
             }
         except Exception as e:
             logger.warning(f"Failed to fetch context from Honcho: {e}")
@@ -483,10 +498,7 @@ class HonchoSessionManager:
             return False
 
         # Resolve user peer for attribution
-        parts = session_key.split(":", 1)
-        channel = parts[0] if len(parts) > 1 else "default"
-        chat_id = parts[1] if len(parts) > 1 else session_key
-        user_peer_id = self._sanitize_id(f"user-{channel}-{chat_id}")
+        user_peer_id = self._resolve_user_peer_id(session_key)
         user_peer = self._peers_cache.get(user_peer_id)
         if not user_peer:
             logger.warning(f"No user peer cached for '{user_peer_id}', skipping migration")
@@ -577,10 +589,7 @@ class HonchoSessionManager:
             return False
 
         # Resolve user peer for attribution
-        parts = session_key.split(":", 1)
-        channel = parts[0] if len(parts) > 1 else "default"
-        chat_id = parts[1] if len(parts) > 1 else session_key
-        user_peer_id = self._sanitize_id(f"user-{channel}-{chat_id}")
+        user_peer_id = self._resolve_user_peer_id(session_key)
         user_peer = self._peers_cache.get(user_peer_id)
         if not user_peer:
             logger.warning(f"No user peer cached for '{user_peer_id}', skipping memory migration")

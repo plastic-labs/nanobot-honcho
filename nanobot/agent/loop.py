@@ -7,7 +7,7 @@ from contextlib import AsyncExitStack
 import json
 import json_repair
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
@@ -174,21 +174,22 @@ class AgentLoop:
         if migrated_anything:
             logger.info(f"Local data migration to Honcho complete for {session_key}")
 
-    def _honcho_prefetch(self, session_key: str, user_message: str) -> str:
-        """Fetch user context from Honcho for system prompt injection. Returns empty string if unavailable."""
+    def _honcho_prefetch(self, session_key: str, user_message: str) -> dict[str, Any] | None:
+        """Fetch user context from Honcho. Returns dict with peer_representation, peer_card, summary or None."""
         if not self.honcho_active or not self.honcho_config or not self.honcho_config.prefetch:
-            return ""
+            return None
         try:
             ctx = self._honcho.get_prefetch_context(session_key, user_message=user_message)
-            parts = []
-            if ctx.get("representation"):
-                parts.append(f"User profile: {ctx['representation']}")
-            if ctx.get("card"):
-                parts.append(f"User context: {ctx['card']}")
-            return "\n\n# Honcho User Context\n\n" + "\n\n".join(parts) if parts else ""
+            if not ctx.get("representation") and not ctx.get("card"):
+                return None
+            return {
+                "peer_representation": ctx.get("representation"),
+                "peer_card": ctx.get("card"),
+                "summary": ctx.get("summary"),
+            }
         except Exception as e:
             logger.warning(f"Honcho prefetch failed: {e}")
-            return ""
+            return None
 
     def _honcho_sync(self, session_key: str, user_content: str, assistant_content: str) -> None:
         """Sync a message pair to Honcho storage."""
@@ -261,9 +262,10 @@ class AgentLoop:
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
         self.tools.register(WebFetchTool())
 
-        # Message tool
-        message_tool = MessageTool(send_callback=self.bus.publish_outbound)
-        self.tools.register(message_tool)
+        # Message tool — stored but not registered by default.
+        # The agent's text reply is routed back automatically.
+        # Register explicitly when cross-channel outbound is needed.
+        self._message_tool = MessageTool(send_callback=self.bus.publish_outbound)
 
         # Spawn tool (for subagents)
         spawn_tool = SpawnTool(manager=self.subagents)
@@ -290,6 +292,7 @@ class AgentLoop:
                     get_honcho_client(client_config)
                     self._honcho = HonchoSessionManager(
                         context_tokens=self.honcho_config.context_tokens,
+                        user_peer_id=self.honcho_config.user_peer_id,
                     )
 
                     self.tools.register(RecallTool(session_manager=self._honcho))
@@ -366,10 +369,25 @@ class AgentLoop:
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
-                messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
+                messages.append({"role": "user", "content": "<system>Reflect on the results and decide next steps.</system>"})
             else:
                 final_content = response.content
                 break
+
+        # If we exhausted iterations without a final response, force one
+        if final_content is None and messages:
+            logger.warning(f"Agent loop hit max iterations ({self.max_iterations}) — forcing summary response")
+            summary_response = await self.provider.chat(
+                messages=messages + [
+                    {"role": "user", "content": "<system>You have used all available tool iterations. Do NOT call any more tools. Summarize what you tried, what you found, and what went wrong or remains unresolved so the user can help redirect.</system>"}
+                ],
+                tools=[],
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                metadata=metadata,
+            )
+            final_content = summary_response.content
 
         return final_content, tools_used
 
@@ -475,17 +493,11 @@ class AgentLoop:
 
         # Build initial messages
         initial_messages = self.context.build_messages(
-            history=session.get_history(max_messages=self.memory_window),
             current_message=msg.content,
+            history=session.get_history(max_messages=self.memory_window),
+            honcho_context=honcho_context,
             media=msg.media if msg.media else None,
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            honcho_active=self.honcho_active,
         )
-
-        # Inject Honcho context into system prompt
-        if honcho_context and initial_messages and initial_messages[0].get("role") == "system":
-            initial_messages[0]["content"] += honcho_context
 
         # Run agent loop
         trace_metadata = {
@@ -497,7 +509,8 @@ class AgentLoop:
         final_content, tools_used = await self._run_agent_loop(initial_messages, metadata=trace_metadata)
 
         if final_content is None:
-            final_content = "I've completed processing but have no response to give."
+            logger.error("Agent loop returned None content even after forced summary")
+            final_content = "I ran into an issue generating a response. Could you try again?"
 
         # Log response preview
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
@@ -548,11 +561,8 @@ class AgentLoop:
         self._honcho_set_context(session_key)
 
         initial_messages = self.context.build_messages(
-            history=session.get_history(max_messages=self.memory_window),
             current_message=msg.content,
-            channel=origin_channel,
-            chat_id=origin_chat_id,
-            honcho_active=self.honcho_active,
+            history=session.get_history(max_messages=self.memory_window),
         )
         trace_metadata = {
             "session_key": session_key,

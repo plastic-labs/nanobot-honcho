@@ -1,210 +1,117 @@
-"""Context builder for assembling agent prompts."""
+"""Context builder for assembling agent messages."""
 
 import base64
 import mimetypes
-import platform
+import re
 from pathlib import Path
 from typing import Any
-
-from nanobot.agent.memory import MemoryStore
-from nanobot.agent.skills import SkillsLoader
 
 
 class ContextBuilder:
     """
-    Builds the context (system prompt + messages) for the agent.
+    Builds the message array for the agent.
 
-    Assembles bootstrap files, memory, skills, and conversation history
-    into a coherent prompt for the LLM.
+    Assembles lore turns from SOUL.md, Honcho session context,
+    and conversation history into a message list for the LLM.
     """
-
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.memory = MemoryStore(workspace)
-        self.skills = SkillsLoader(workspace)
-
-    # ── System prompt ────────────────────────────────────────────────
-
-    def build_system_prompt(
-        self,
-        skill_names: list[str] | None = None,
-        honcho_active: bool = False,
-    ) -> str:
-        """
-        Build the system prompt from bootstrap files, memory, and skills.
-
-        Args:
-            skill_names: Optional list of skills to include.
-            honcho_active: When True, use slim identity (no personality)
-                          and skip SOUL.md/USER.md/memory.
-
-        Returns:
-            Complete system prompt.
-        """
-        parts = []
-
-        # Core identity (slim when Honcho provides narrative turns)
-        parts.append(self._get_identity(slim=honcho_active))
-
-        # Bootstrap files (skip USER/memory when Honcho active — SOUL.md always loads as lore)
-        skip = {"USER.md"} if honcho_active else set()
-        bootstrap = self._load_bootstrap_files(skip=skip)
-        if bootstrap:
-            parts.append(bootstrap)
-
-        # Memory context (only when Honcho is NOT active)
-        if not honcho_active:
-            memory = self.memory.get_memory_context()
-            if memory:
-                parts.append(f"# Memory\n\n{memory}")
-
-        # Skills - progressive loading
-        # 1. Always-loaded skills: include full content
-        always_skills = self.skills.get_always_skills()
-        if always_skills:
-            always_content = self.skills.load_skills_for_context(always_skills)
-            if always_content:
-                parts.append(f"# Active Skills\n\n{always_content}")
-
-        # 2. Available skills: only show summary (agent uses read_file to load)
-        skills_summary = self.skills.build_skills_summary()
-        if skills_summary:
-            parts.append(f"""# Skills
-
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
-
-{skills_summary}""")
-
-        return "\n\n---\n\n".join(parts)
-
-    def _get_identity(self, slim: bool = False) -> str:
-        """
-        Get the core identity section.
-
-        Args:
-            slim: When True, return only runtime info (time, workspace, tool
-                  guidelines). Personality is provided via narrative turns.
-        """
-        from datetime import datetime
-        import time as _time
-        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-        tz = _time.strftime("%Z") or "UTC"
-        workspace_path = str(self.workspace.expanduser().resolve())
-        system = platform.system()
-        runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-
-        if slim:
-            return f"""# nanobot
-
-## Current Time
-{now} ({tz})
-
-## Runtime
-{runtime}
-
-## Workspace
-Your workspace is at: {workspace_path}
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
-
-IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
-Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
-For normal conversation, just respond with text - do not call the message tool."""
-
-        return f"""# nanobot
-
-You are nanobot, a helpful AI assistant. You have access to tools that allow you to:
-- Read, write, and edit files
-- Execute shell commands
-- Search the web and fetch web pages
-- Send messages to users on chat channels
-- Spawn subagents for complex background tasks
-
-## Current Time
-{now} ({tz})
-
-## Runtime
-{runtime}
-
-## Workspace
-Your workspace is at: {workspace_path}
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
-
-IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
-Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
-For normal conversation, just respond with text - do not call the message tool.
-
-Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
-
-## User-facing communication
-- If the user asks how your memory works, answer simply: you remember things from conversations over time. Do not mention file names, paths, or internal tools.
-- Do not announce when you write to memory or take internal actions. Just do it."""
-
-    def _load_bootstrap_files(self, skip: set[str] | None = None) -> str:
-        """
-        Load bootstrap files from workspace.
-
-        Args:
-            skip: Set of filenames to skip (e.g., {"SOUL.md", "USER.md"}).
-        """
-        skip = skip or set()
-        parts = []
-
-        for filename in self.BOOTSTRAP_FILES:
-            if filename in skip:
-                continue
-            file_path = self.workspace / filename
-            if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
-                parts.append(f"## {filename}\n\n{content}")
-
-        return "\n\n".join(parts) if parts else ""
 
     # ── Message assembly ─────────────────────────────────────────────
 
     def build_messages(
         self,
-        history: list[dict[str, Any]],
         current_message: str,
-        skill_names: list[str] | None = None,
+        history: list[dict[str, Any]] | None = None,
+        honcho_context: dict[str, Any] | None = None,
         media: list[str] | None = None,
-        channel: str | None = None,
-        chat_id: str | None = None,
-        honcho_active: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
 
+        Message array structure:
+          1. Lore turns from SOUL.md (identity narrative)
+          2. Honcho context injection (peer_representation, peer_card, summary)
+          3. Session history messages
+          4. Current user message
+
         Args:
-            history: Previous conversation messages.
             current_message: The new user message.
-            skill_names: Optional skills to include.
+            history: Previous conversation messages (from local session or Honcho).
+            honcho_context: Optional dict with keys:
+                - peer_representation: str | None
+                - peer_card: list[str] | str | None
+                - summary: str | None
             media: Optional list of local file paths for images/media.
-            channel: Current channel (telegram, feishu, etc.).
-            chat_id: Current chat/user ID.
-            honcho_active: Whether Honcho is active (slim system prompt).
 
         Returns:
-            List of messages including system prompt.
+            List of messages for the LLM.
         """
         messages = []
 
-        # System prompt
-        system_prompt = self.build_system_prompt(skill_names, honcho_active=honcho_active)
-        if channel and chat_id:
-            system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
-        messages.append({"role": "system", "content": system_prompt})
+        # 1. Lore turns from SOUL.md
+        messages.extend(self._parse_lore_file())
 
-        # History
-        messages.extend(history)
+        # 2. Honcho context injection (representation, card, summary)
+        if honcho_context:
+            context_parts = []
+            if honcho_context.get("peer_representation"):
+                context_parts.append(
+                    f"<peer_representation>{honcho_context['peer_representation']}</peer_representation>"
+                )
+            if honcho_context.get("peer_card"):
+                card = honcho_context["peer_card"]
+                if isinstance(card, list):
+                    card = "\n".join(card)
+                context_parts.append(f"<peer_card>{card}</peer_card>")
+            if honcho_context.get("summary"):
+                context_parts.append(
+                    f"<summary>{honcho_context['summary']}</summary>"
+                )
 
-        # Current message (with optional image attachments)
+            if context_parts:
+                context_content = "Here's your context for this session:\n\n" + "\n\n".join(context_parts)
+                if history:
+                    context_content += "\n\nWhat follows is your recent chat history with me."
+                messages.append({"role": "user", "content": context_content})
+                messages.append({
+                    "role": "assistant",
+                    "content": "Got it, I have context on you and a summary of where we left off. Ready.",
+                })
+
+        # 3. Session history
+        if history:
+            messages.extend(history)
+
+        # 4. Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)
         messages.append({"role": "user", "content": user_content})
 
         return messages
+
+    # ── Lore parsing ─────────────────────────────────────────────────
+
+    def _parse_lore_file(self) -> list[dict[str, str]]:
+        """
+        Parse SOUL.md into a list of user/assistant message dicts.
+
+        Extracts <turn role="user|assistant">...</turn> blocks.
+        Text outside turn blocks is discarded.
+        """
+        soul_path = self.workspace / "SOUL.md"
+        if not soul_path.exists():
+            return []
+
+        text = soul_path.read_text(encoding="utf-8")
+        turns = re.findall(
+            r'<turn\s+role="(user|assistant)">\s*(.*?)\s*</turn>',
+            text,
+            re.DOTALL,
+        )
+        return [{"role": role, "content": content.strip()} for role, content in turns]
+
+    # ── Helpers ───────────────────────────────────────────────────────
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
         """Build user message content with optional base64-encoded images."""
@@ -231,18 +138,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         tool_name: str,
         result: str
     ) -> list[dict[str, Any]]:
-        """
-        Add a tool result to the message list.
-
-        Args:
-            messages: Current message list.
-            tool_call_id: ID of the tool call.
-            tool_name: Name of the tool.
-            result: Tool execution result.
-
-        Returns:
-            Updated message list.
-        """
+        """Add a tool result to the message list."""
         messages.append({
             "role": "tool",
             "tool_call_id": tool_call_id,
@@ -258,18 +154,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         tool_calls: list[dict[str, Any]] | None = None,
         reasoning_content: str | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Add an assistant message to the message list.
-
-        Args:
-            messages: Current message list.
-            content: Message content.
-            tool_calls: Optional tool calls.
-            reasoning_content: Thinking output (Kimi, DeepSeek-R1, etc.).
-
-        Returns:
-            Updated message list.
-        """
+        """Add an assistant message to the message list."""
         msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
 
         if tool_calls:

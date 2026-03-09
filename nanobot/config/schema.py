@@ -259,6 +259,7 @@ class HonchoConfig(BaseModel):
     prefetch: bool = True  # Pre-fetch user context before each LLM call
     context_tokens: int | None = None  # Token budget for context fetch (None = default)
     environment: str = "production"
+    user_peer_id: str | None = None  # Fixed Honcho peer ID for the user (bypasses channel-based derivation)
 
 
 class VaultConfig(BaseModel):
